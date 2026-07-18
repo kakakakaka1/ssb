@@ -47,7 +47,9 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          body: |
+            `-with-singbox` 完整包附带未修改的 [sing-box](https://github.com/SagerNet/sing-box) v${{ env.SINGBOX_VERSION }} 官方二进制（GPL-3.0，版权归 SagerNet）；精简包解压后运行 `./ssb install` 下载内核。
+          generate_release_notes: true
           files: |
             dist/*.tar.gz
             dist/checksums.txt
-          generate_release_notes: true

@@ -96,3 +96,14 @@ go test ./...
 
 生成逻辑锁定 sing-box 1.13.x 语法（新版 DNS/route actions/rule-set）；任何生成结果
 都会先 `sing-box check`，与本机内核版本不符会在生成时立刻报错。
+
+## 许可
+
+ssb 本身以 [MIT License](LICENSE) 开源。
+
+Release 中的 `-with-singbox` 完整包额外附带了未经修改的
+[sing-box](https://github.com/SagerNet/sing-box) 官方二进制（仅打包在一起分发，
+不构成衍生作品），sing-box 版权归 SagerNet 所有，遵循
+[GPL-3.0（含附加条款）](https://github.com/SagerNet/sing-box/blob/dev-next/LICENSE)，
+其源码见上述仓库；附带的内核版本号在 Release 说明与
+`.github/workflows/release.yml` 的 `SINGBOX_VERSION` 中注明。
