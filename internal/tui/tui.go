@@ -1,6 +1,6 @@
 // Package tui is the interactive terminal UI: 服务 / 订阅 / 节点 / 设置 四页签。
-// 运行时的节点切换、测速、连接查看交给官方 Dashboard（clash_api），
-// TUI 只做 Dashboard 做不了的：订阅/节点管理、配置生成、进程启停、设置。
+// 节点页可直接切换出口（clash_api）；测速、连接查看等仍交给官方 Dashboard，
+// 其余职责：订阅/节点管理、配置生成、进程启停、设置。
 package tui
 
 import (
@@ -49,6 +49,7 @@ var (
 type tickMsg struct {
 	status  string
 	logTail string
+	now     string // PROXY 选择器当前出口（clash_api 不可达时为空）
 }
 
 type opDoneMsg struct {
@@ -61,11 +62,12 @@ type model struct {
 	tab           tab
 	width, height int
 
-	status  string
-	logTail string
-	busy    bool
-	flash   string
-	flashE  bool
+	status   string
+	logTail  string
+	nowProxy string
+	busy     bool
+	flash    string
+	flashE   bool
 
 	subCursor  int
 	nodeCursor int
@@ -91,13 +93,13 @@ func (m model) Init() tea.Cmd { return tea.Batch(refreshCmd(m.a), tickCmd(m.a)) 
 
 func refreshCmd(a *app.App) tea.Cmd {
 	return func() tea.Msg {
-		return tickMsg{status: a.StatusText(), logTail: sbx.Tail(a.Dirs, 12)}
+		return tickMsg{status: a.StatusText(), logTail: sbx.Tail(a.Dirs, 12), now: a.SelectedNode()}
 	}
 }
 
 func tickCmd(a *app.App) tea.Cmd {
 	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
-		return tickMsg{status: a.StatusText(), logTail: sbx.Tail(a.Dirs, 12)}
+		return tickMsg{status: a.StatusText(), logTail: sbx.Tail(a.Dirs, 12), now: a.SelectedNode()}
 	})
 }
 
@@ -120,7 +122,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		m.status, m.logTail = msg.status, msg.logTail
+		m.status, m.logTail, m.nowProxy = msg.status, msg.logTail, msg.now
 		return m, tickCmd(m.a)
 
 	case opDoneMsg:
@@ -265,6 +267,9 @@ func (m model) keysService(key string) (tea.Model, tea.Cmd) {
 			if err := m.a.Start(context.Background()); err != nil {
 				return "", err
 			}
+			if m.a.State.Settings.DashboardOff {
+				return "已启动（Dashboard 已关闭，节点页回车切换出口）", nil
+			}
 			return "已启动 · Dashboard: " + m.a.DashboardURL(), nil
 		})
 	case "r":
@@ -287,6 +292,10 @@ func (m model) keysService(key string) (tea.Model, tea.Cmd) {
 			return m.a.Install(context.Background())
 		})
 	case "d":
+		if m.a.State.Settings.DashboardOff {
+			m.flash, m.flashE = "Dashboard 已关闭（设置页可重新开启；节点切换在节点页回车）", false
+			return m, nil
+		}
 		m.flash, m.flashE = "Dashboard: "+m.a.DashboardURL()+"  secret: "+m.a.State.Settings.ClashSecret, false
 		return m, nil
 	}
@@ -369,6 +378,24 @@ func (m model) keysNodes(key string) (tea.Model, tea.Cmd) {
 		}
 	case "a":
 		return m.prompt("addlink", "粘贴分享链接（支持多条空格分隔 / base64，Esc 取消）")
+	case "enter", " ":
+		if len(nodes) == 0 {
+			return m, nil
+		}
+		tag := nodes[m.nodeCursor].Tag
+		return m.startOp(func() (string, error) {
+			if err := m.a.SelectNode(tag); err != nil {
+				return "", err
+			}
+			return "已切换出口 → " + tag, nil
+		})
+	case "A":
+		return m.startOp(func() (string, error) {
+			if err := m.a.SelectNode("auto"); err != nil {
+				return "", err
+			}
+			return "已切换出口 → auto（自动测速）", nil
+		})
 	case "x":
 		if len(nodes) == 0 {
 			return m, nil
@@ -487,6 +514,9 @@ func settingRows() []settingRow {
 		{label: "clash_api 监听（0.0.0.0:9090 可局域网访问 Dashboard）",
 			get: func(a *app.App) string { return a.State.Settings.ClashListen },
 			set: func(a *app.App, v string) error { a.State.Settings.ClashListen = v; return nil }},
+		{label: "Dashboard 网页面板（关=仅 TUI/API 控制）",
+			get:   func(a *app.App) string { return boolStr(!a.State.Settings.DashboardOff) },
+			cycle: func(a *app.App) { a.State.Settings.DashboardOff = !a.State.Settings.DashboardOff }},
 		{label: "Dashboard（metacubexd / zashboard / yacd）",
 			get: func(a *app.App) string { return a.State.Settings.ExternalUI },
 			cycle: func(a *app.App) {
@@ -578,7 +608,7 @@ func (m model) helpLine() string {
 	case tabSubs:
 		return "a 添加 · u 更新选中 · U 全部更新 · x 删除 · j/k 移动 · " + common
 	case tabNodes:
-		return "a 添加链接 · x 删除(手动节点) · j/k 移动 · " + common
+		return "回车 切换出口 · A 自动测速 · a 添加 · x 删除(手动) · j/k 移动 · " + common
 	case tabSettings:
 		return "回车/空格 修改 · g 生成配置 · r 重启 · j/k 移动 · " + common
 	}
@@ -647,7 +677,13 @@ func (m model) viewNodes() string {
 		manual[n.Tag] = true
 	}
 	var b strings.Builder
-	rows := max(3, m.height-8)
+	now := m.nowProxy
+	if now == "" {
+		b.WriteString(styBody.Render(styDim.Render("当前出口: （未运行或 clash_api 不可达）")) + "\n")
+	} else {
+		b.WriteString(styBody.Render(styDim.Render("当前出口: ")+styOK.Render(now)) + "\n")
+	}
+	rows := max(3, m.height-9)
 	start := 0
 	if m.nodeCursor >= rows {
 		start = m.nodeCursor - rows + 1
@@ -659,11 +695,15 @@ func (m model) viewNodes() string {
 		if i == m.nodeCursor {
 			cursor, st = "▸ ", styCursor
 		}
+		sel := "  "
+		if now != "" && n.Tag == now {
+			sel = styOK.Render("● ")
+		}
 		src := styDim.Render("订")
 		if manual[n.Tag] {
 			src = styOK.Render("手")
 		}
-		b.WriteString(styBody.Render(fmt.Sprintf("%s%s %s %-10v %v", cursor, src,
+		b.WriteString(styBody.Render(fmt.Sprintf("%s%s%s %s %-10v %v", cursor, sel, src,
 			st.Render(fmt.Sprintf("%-28s", clip(n.Tag, 28))), n.Outbound["type"], n.Outbound["server"])) + "\n")
 	}
 	if len(nodes) > rows {

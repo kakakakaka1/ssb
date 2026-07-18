@@ -25,6 +25,7 @@ type Settings struct {
 	ClashListen    string `json:"clash_listen"`    // clash_api external_controller
 	ClashSecret    string `json:"clash_secret"`    // 首次生成随机值
 	ExternalUI     string `json:"external_ui"`     // metacubexd | zashboard | yacd
+	DashboardOff   bool   `json:"dashboard_off"`   // 关闭网页面板（clash_api 仍监听，TUI 切换节点用）
 	MirrorPrefix   string `json:"mirror_prefix"`   // GitHub 镜像前缀（UI/内核下载用），如 https://ghproxy.net/
 	FakeIP         bool   `json:"fakeip"`          // FakeIP DNS
 	DownloadDetour string `json:"download_detour"` // 规则集/UI 下载出站: direct | PROXY

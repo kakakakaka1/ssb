@@ -186,6 +186,17 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 		defaultMode = "Global"
 	}
 
+	clashAPI := map[string]any{
+		"external_controller": s.ClashListen,
+		"secret":              s.ClashSecret,
+		"default_mode":        defaultMode,
+	}
+	if !s.DashboardOff { // 关面板时仍保留 clash_api（TUI 切换节点依赖它）
+		clashAPI["external_ui"] = dirs.UIDir()
+		clashAPI["external_ui_download_url"] = mirror(uiDownloadURL(s.ExternalUI))
+		clashAPI["external_ui_download_detour"] = detour
+	}
+
 	cfg := config{
 		Log: &logCfg{Level: "info", Timestamp: true},
 		DNS: &dnsCfg{
@@ -210,14 +221,7 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 				"store_fakeip": true,
 				"store_rdrc":   true,
 			},
-			ClashAPI: map[string]any{
-				"external_controller":         s.ClashListen,
-				"external_ui":                 dirs.UIDir(),
-				"external_ui_download_url":    mirror(uiDownloadURL(s.ExternalUI)),
-				"external_ui_download_detour": detour,
-				"secret":                      s.ClashSecret,
-				"default_mode":                defaultMode,
-			},
+			ClashAPI: clashAPI,
 		},
 	}
 

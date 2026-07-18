@@ -260,6 +260,30 @@ func (a *App) Restart(ctx context.Context) error {
 	return a.Start(ctx)
 }
 
+// SelectNode switches the PROXY selector at runtime via clash_api.
+// tag 可以是节点名或 "auto"（自动测速）。选择会由 cache_file 持久化。
+func (a *App) SelectNode(tag string) error {
+	if _, ok := sbx.Running(a.Dirs); !ok {
+		return fmt.Errorf("sing-box 未运行（服务页 s 启动后再切换）")
+	}
+	s := a.State.Settings
+	if err := sbx.SelectProxy(s.ClashListen, s.ClashSecret, tag); err != nil {
+		return fmt.Errorf("切换失败: %w（若刚增删过节点，先 g 生成、r 重启）", err)
+	}
+	return nil
+}
+
+// SelectedNode returns the PROXY selector's current choice, "" when
+// sing-box isn't running or clash_api is unreachable.
+func (a *App) SelectedNode() string {
+	s := a.State.Settings
+	now, err := sbx.SelectedProxy(s.ClashListen, s.ClashSecret)
+	if err != nil {
+		return ""
+	}
+	return now
+}
+
 // RunCore generates the config then replaces this process with sing-box in
 // the foreground（Docker/调试用：信号直达内核进程）。
 func (a *App) RunCore(ctx context.Context) error {
@@ -295,9 +319,18 @@ func (a *App) StatusText() string {
 	}
 	alive := sbx.APIAlive(a.State.Settings.ClashListen, a.State.Settings.ClashSecret)
 	fmt.Fprintf(&b, "clash_api: %s\n", map[bool]string{true: "可达", false: "不可达"}[alive])
+	if alive {
+		if now := a.SelectedNode(); now != "" {
+			fmt.Fprintf(&b, "当前出口: %s\n", now)
+		}
+	}
 	fmt.Fprintf(&b, "节点数: %d（手动 %d + 订阅 %d 个源）\n",
 		len(a.State.AllNodes()), len(a.State.Manual), len(a.State.Subscriptions))
-	fmt.Fprintf(&b, "Dashboard: %s\n", a.DashboardURL())
+	if a.State.Settings.DashboardOff {
+		b.WriteString("Dashboard: 已关闭（节点页可直接切换节点）\n")
+	} else {
+		fmt.Fprintf(&b, "Dashboard: %s\n", a.DashboardURL())
+	}
 	return b.String()
 }
 

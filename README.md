@@ -2,8 +2,8 @@
 
 单二进制 TUI/CLI 工具：把节点分享链接（`vless://`、`anytls://` 等）和订阅链接变成
 sing-box 可直接运行的 `config.json`（默认 **TUN + FakeIP + 规则分流**），并托管
-sing-box 进程。运行时的切换节点/测延迟/看连接交给 **官方 Dashboard**（clash_api +
-metacubexd/zashboard/yacd，浏览器访问）。
+sing-box 进程。TUI 节点页可直接切换出口；测速/看连接等交给 **官方 Dashboard**
+（clash_api + metacubexd/zashboard/yacd，浏览器访问，不需要可在设置中关闭）。
 
 - **不污染系统**：所有东西（工具、sing-box 内核、配置、状态、日志）都在一个目录里，卸载 = 删目录
 - 支持协议：VLESS（含 REALITY/Vision）、AnyTLS、Shadowsocks（含 2022）、VMess、Trojan、Hysteria2、TUIC
@@ -55,6 +55,10 @@ sing-box 首次启动会按配置里的 `external_ui_download_url` 自动把 Das
 `data/ui/`（默认 metacubexd，可在设置页换 zashboard / yacd；国内可配 GitHub
 镜像前缀加速）。访问 `./ssb dashboard` 打印的地址；要在局域网其他设备访问，把
 设置里的 clash_api 监听改成 `0.0.0.0:9090`（secret 已默认随机生成）。
+
+不想用网页面板：设置页把「Dashboard 网页面板」关掉即可——clash_api 仍监听
+（默认仅 127.0.0.1，供本机控制），TUI 节点页回车切换出口、A 切回自动测速，
+所选出口由 sing-box 的 cache_file 持久化，重启不丢。
 
 ## 权限说明（TUN）
 

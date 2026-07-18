@@ -130,6 +130,22 @@ func TestBuildEmptyNodes(t *testing.T) {
 	}
 }
 
+func TestDashboardOff(t *testing.T) {
+	st := testState(t)
+	st.Settings.DashboardOff = true
+	m := build(t, st)
+	capi := m["experimental"].(map[string]any)["clash_api"].(map[string]any)
+	for _, k := range []string{"external_ui", "external_ui_download_url", "external_ui_download_detour"} {
+		if _, has := capi[k]; has {
+			t.Fatalf("关闭面板后不应有 %s", k)
+		}
+	}
+	// clash_api 本体必须保留（TUI 切换节点依赖）
+	if capi["external_controller"] != "127.0.0.1:9090" || capi["secret"] == "" {
+		t.Fatalf("clash_api 应保留: %v", capi)
+	}
+}
+
 func TestRuleSetCDNAndMirrorPrefix(t *testing.T) {
 	st := testState(t)
 	st.Settings.MirrorPrefix = "https://ghproxy.net/"

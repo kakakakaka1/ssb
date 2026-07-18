@@ -197,7 +197,11 @@ func main() {
 			die(err)
 		}
 		fmt.Println("已启动")
-		fmt.Println("Dashboard:", a.DashboardURL())
+		if a.State.Settings.DashboardOff {
+			fmt.Println("Dashboard 已关闭（TUI 节点页可直接切换节点）")
+		} else {
+			fmt.Println("Dashboard:", a.DashboardURL())
+		}
 
 	case "stop":
 		if err := a.Stop(); err != nil {
@@ -224,6 +228,10 @@ func main() {
 		printLogs(a, follow)
 
 	case "dashboard":
+		if a.State.Settings.DashboardOff {
+			fmt.Println("Dashboard 网页面板已在设置中关闭（TUI 节点页可直接切换节点）")
+			break
+		}
 		fmt.Println("地址  :", a.DashboardURL())
 		fmt.Println("secret:", a.State.Settings.ClashSecret)
 

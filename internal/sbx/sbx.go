@@ -234,23 +234,64 @@ func Stop(d profile.Dirs) error {
 	return nil
 }
 
-// APIAlive probes the clash_api /version endpoint.
-func APIAlive(listen, secret string) bool {
-	url := "http://" + listen + "/version"
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+// ---- clash_api client（状态探测 + TUI 节点切换）----
+
+func apiDo(method, listen, secret, path string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(method, "http://"+listen+path, body)
 	if err != nil {
-		return false
+		return nil, err
 	}
 	if secret != "" {
 		req.Header.Set("Authorization", "Bearer "+secret)
 	}
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Do(req)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return (&http.Client{Timeout: 2 * time.Second}).Do(req)
+}
+
+// APIAlive probes the clash_api /version endpoint.
+func APIAlive(listen, secret string) bool {
+	resp, err := apiDo(http.MethodGet, listen, secret, "/version", nil)
 	if err != nil {
 		return false
 	}
 	resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// SelectedProxy returns the PROXY selector's current choice（如 "auto" 或节点名）.
+func SelectedProxy(listen, secret string) (string, error) {
+	resp, err := apiDo(http.MethodGet, listen, secret, "/proxies/PROXY", nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("clash_api HTTP %d", resp.StatusCode)
+	}
+	var v struct {
+		Now string `json:"now"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return "", err
+	}
+	return v.Now, nil
+}
+
+// SelectProxy switches the PROXY selector to name via clash_api.
+func SelectProxy(listen, secret, name string) error {
+	b, _ := json.Marshal(map[string]string{"name": name})
+	resp, err := apiDo(http.MethodPut, listen, secret, "/proxies/PROXY", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("clash_api HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
 }
 
 func tailFile(path string, n int) string {
