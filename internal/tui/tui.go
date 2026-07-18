@@ -511,7 +511,7 @@ func settingRows() []settingRow {
 				a.State.Settings.MixedPort = n
 				return nil
 			}},
-		{label: "clash_api 监听（0.0.0.0:9090 可局域网访问 Dashboard）",
+		{label: "clash_api 监听（0.0.0.0 可局域网访问）",
 			get: func(a *app.App) string { return a.State.Settings.ClashListen },
 			set: func(a *app.App, v string) error { a.State.Settings.ClashListen = v; return nil }},
 		{label: "Dashboard 网页面板（关=仅 TUI/API 控制）",
@@ -660,7 +660,7 @@ func (m model) viewSubs() string {
 		if !s.UpdatedAt.IsZero() {
 			when = s.UpdatedAt.Format("01-02 15:04")
 		}
-		b.WriteString(styBody.Render(cursor+st.Render(fmt.Sprintf("%-14s", clip(s.Name, 14)))+
+		b.WriteString(styBody.Render(cursor+st.Render(pad(clip(s.Name, 14), 14))+
 			fmt.Sprintf(" %3d 节点 · %s%s", len(s.Nodes), when, info)) + "\n")
 		b.WriteString(styBody.Render("   "+styDim.Render(clip(s.URL, max(20, m.width-6)))) + "\n")
 	}
@@ -704,7 +704,7 @@ func (m model) viewNodes() string {
 			src = styOK.Render("手")
 		}
 		b.WriteString(styBody.Render(fmt.Sprintf("%s%s%s %s %-10v %v", cursor, sel, src,
-			st.Render(fmt.Sprintf("%-28s", clip(n.Tag, 28))), n.Outbound["type"], n.Outbound["server"])) + "\n")
+			st.Render(pad(clip(n.Tag, 28), 28)), n.Outbound["type"], n.Outbound["server"])) + "\n")
 	}
 	if len(nodes) > rows {
 		b.WriteString(styBody.Render(styDim.Render(fmt.Sprintf("  … %d/%d", m.nodeCursor+1, len(nodes)))) + "\n")
@@ -724,7 +724,7 @@ func (m model) viewSettings() string {
 		if val == "" {
 			val = styDim.Render("(空)")
 		}
-		b.WriteString(styBody.Render(cursor+st.Render(fmt.Sprintf("%-44s", clip(row.label, 44)))+" "+val) + "\n")
+		b.WriteString(styBody.Render(cursor+st.Render(pad(clip(row.label, 44), 44))+" "+val) + "\n")
 	}
 	b.WriteString("\n" + styBody.Render(styDim.Render("secret: "+m.a.State.Settings.ClashSecret)) + "\n")
 	return b.String()
@@ -744,6 +744,15 @@ func okGen(msg, warn string) string {
 		return msg + "（" + warn + "）"
 	}
 	return msg
+}
+
+// pad right-pads s with spaces to display width n（fmt 的 %-Ns 按字符数不按
+// 终端列宽，中文占两格会歪，必须用 lipgloss.Width）.
+func pad(s string, n int) string {
+	if d := n - lipgloss.Width(s); d > 0 {
+		return s + strings.Repeat(" ", d)
+	}
+	return s
 }
 
 func clip(s string, n int) string {
