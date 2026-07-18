@@ -1,0 +1,40 @@
+# 打 tag（v*）自动构建并发布 Release：
+#   git tag v0.1.0 && git push origin v0.1.0
+# 产物：ssb-<版本>-linux-{amd64,arm64}.tar.gz + checksums.txt
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # 允许内置 GITHUB_TOKEN 创建 Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Build binaries
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+              -o dist/ssb ./cmd/ssb
+            tar -czf "dist/ssb-${VERSION}-linux-${arch}.tar.gz" \
+              -C dist ssb -C "$GITHUB_WORKSPACE" README.md
+            rm dist/ssb
+          done
+          cd dist && sha256sum *.tar.gz > checksums.txt
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          generate_release_notes: true

@@ -1,0 +1,26 @@
+# ssb via Docker：TUN 接管宿主流量必须 host 网络 + NET_ADMIN + /dev/net/tun。
+# 用法：
+#   docker compose build
+#   docker compose run --rm ssb doctor          # 体检
+#   docker compose run --rm ssb add "vless://…" # 添加节点
+#   docker compose up -d                        # 前台跑 sing-box（up 前先加好节点）
+#   docker compose run --rm -it ssb             # 进 TUI
+services:
+  ssb:
+    build: .
+    image: ssb:latest
+    container_name: ssb
+    network_mode: host          # TUN/auto_route 要接管宿主网络栈，必须 host
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./ssb-data:/app/data    # 状态与缓存持久化
+      - ./ssb-logs:/app/logs
+      - ./ssb-run:/app/run
+    environment:
+      - SSB_DIR=/app
+    # run-core = 生成并校验 config.json 后前台 exec sing-box（信号直达，适合容器托管）
+    command: ["run-core"]
+    restart: unless-stopped

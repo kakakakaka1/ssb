@@ -1,0 +1,229 @@
+// Package render generates the sing-box config.json (1.13.x schema):
+// TUN + FakeIP + rule-set 分流 + clash_api Dashboard。
+// 生成结果始终交给 `sing-box check` 做最终校验。
+package render
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"ssb/internal/profile"
+)
+
+// —— 顶层用结构体保证键序，规则等多态对象用 map（encoding/json 对 map 按键排序，输出确定）。
+
+type config struct {
+	Log          *logCfg   `json:"log,omitempty"`
+	DNS          *dnsCfg   `json:"dns,omitempty"`
+	Inbounds     []any     `json:"inbounds,omitempty"`
+	Outbounds    []any     `json:"outbounds,omitempty"`
+	Route        *routeCfg `json:"route,omitempty"`
+	Experimental *expCfg   `json:"experimental,omitempty"`
+}
+
+type logCfg struct {
+	Level     string `json:"level"`
+	Timestamp bool   `json:"timestamp"`
+}
+
+type dnsCfg struct {
+	Servers          []any  `json:"servers"`
+	Rules            []any  `json:"rules,omitempty"`
+	Final            string `json:"final,omitempty"`
+	IndependentCache bool   `json:"independent_cache,omitempty"`
+}
+
+type routeCfg struct {
+	Rules                 []any  `json:"rules,omitempty"`
+	RuleSet               []any  `json:"rule_set,omitempty"`
+	Final                 string `json:"final,omitempty"`
+	AutoDetectInterface   bool   `json:"auto_detect_interface,omitempty"`
+	DefaultDomainResolver any    `json:"default_domain_resolver,omitempty"`
+}
+
+type expCfg struct {
+	CacheFile map[string]any `json:"cache_file,omitempty"`
+	ClashAPI  map[string]any `json:"clash_api,omitempty"`
+}
+
+// 规则集默认走 testingcf.jsdelivr.net CDN（MetaCubeX/meta-rules-dat 的 sing 分支），
+// 国内可直连，因此不套用 GitHub 镜像前缀。
+const (
+	geositeCNURL = "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/cn.srs"
+	geoipCNURL   = "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/cn.srs"
+)
+
+// uiDownloadURL returns the dashboard artifact for external_ui_download_url.
+// 注意：sing-box 的下载器只支持 zip 归档（tgz 会报 "zip: not a valid zip file"）。
+func uiDownloadURL(name string) string {
+	switch name {
+	case "zashboard":
+		return "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip"
+	case "yacd":
+		return "https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip"
+	default: // metacubexd（gh-pages 分支的 zip 归档，sing-box 生态的常用来源）
+		return "https://github.com/MetaCubeX/metacubexd/archive/gh-pages.zip"
+	}
+}
+
+// Build renders config.json bytes for the current state.
+func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
+	s := st.Settings
+	nodes := st.AllNodes()
+
+	mirror := func(u string) string { return s.MirrorPrefix + u }
+	detour := s.DownloadDetour
+	if detour != "PROXY" {
+		detour = "direct"
+	}
+
+	// ---- outbounds ----
+	var nodeTags []string
+	outbounds := []any{}
+	proxyMembers := []string{}
+	if len(nodes) > 0 {
+		proxyMembers = append(proxyMembers, "auto")
+	}
+	for _, n := range nodes {
+		nodeTags = append(nodeTags, n.Tag)
+		outbounds = append(outbounds, n.Outbound)
+	}
+	proxyMembers = append(proxyMembers, nodeTags...)
+	proxyMembers = append(proxyMembers, "direct")
+
+	selector := map[string]any{
+		"type": "selector", "tag": "PROXY",
+		"outbounds":                   proxyMembers,
+		"interrupt_exist_connections": true,
+	}
+	if len(nodes) > 0 {
+		selector["default"] = "auto"
+	}
+	head := []any{selector}
+	if len(nodes) > 0 {
+		head = append(head, map[string]any{
+			"type": "urltest", "tag": "auto",
+			"outbounds": nodeTags,
+			"url":       "https://www.gstatic.com/generate_204",
+			"interval":  "3m",
+			"tolerance": 50,
+		})
+	}
+	head = append(head, map[string]any{"type": "direct", "tag": "direct"})
+	outbounds = append(head, outbounds...)
+
+	// ---- dns ----
+	dnsServers := []any{
+		map[string]any{"type": "udp", "tag": "dns-cn", "server": s.DNSCN},
+		map[string]any{"type": "https", "tag": "dns-proxy", "server": s.DNSProxy, "detour": "PROXY"},
+	}
+	var dnsRules []any
+	dnsRules = append(dnsRules, map[string]any{"clash_mode": "Direct", "server": "dns-cn"})
+	if s.RouteMode != "global" {
+		dnsRules = append(dnsRules, map[string]any{"rule_set": "geosite-cn", "server": "dns-cn"})
+	}
+	if s.FakeIP {
+		dnsServers = append(dnsServers, map[string]any{
+			"type": "fakeip", "tag": "dns-fakeip",
+			"inet4_range": "198.18.0.0/15",
+			"inet6_range": "fc00::/18",
+		})
+		dnsRules = append(dnsRules, map[string]any{"query_type": []string{"A", "AAAA"}, "server": "dns-fakeip"})
+	}
+
+	// ---- inbounds ----
+	var inbounds []any
+	if s.TunEnabled {
+		tun := map[string]any{
+			"type": "tun", "tag": "tun-in",
+			"address":      []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
+			"mtu":          9000,
+			"auto_route":   true,
+			"strict_route": true,
+			"stack":        "mixed",
+		}
+		if s.AutoRedirect {
+			tun["auto_redirect"] = true
+		}
+		inbounds = append(inbounds, tun)
+	}
+	if s.MixedEnabled || !s.TunEnabled { // 至少保证有一个入站
+		inbounds = append(inbounds, map[string]any{
+			"type": "mixed", "tag": "mixed-in",
+			"listen": "127.0.0.1", "listen_port": s.MixedPort,
+		})
+	}
+
+	// ---- route ----
+	rules := []any{
+		map[string]any{"action": "sniff"},
+		map[string]any{"protocol": "dns", "action": "hijack-dns"},
+		map[string]any{"ip_is_private": true, "outbound": "direct"},
+		map[string]any{"clash_mode": "Direct", "outbound": "direct"},
+		map[string]any{"clash_mode": "Global", "outbound": "PROXY"},
+	}
+	var ruleSets []any
+	needCN := s.RouteMode != "global"
+	if needCN {
+		rules = append(rules,
+			map[string]any{"rule_set": []string{"geosite-cn"}, "outbound": "direct"},
+			map[string]any{"rule_set": []string{"geoip-cn"}, "outbound": "direct"},
+		)
+		ruleSets = append(ruleSets,
+			map[string]any{
+				"type": "remote", "tag": "geosite-cn", "format": "binary",
+				"url": geositeCNURL, "download_detour": detour, "update_interval": "1d",
+			},
+			map[string]any{
+				"type": "remote", "tag": "geoip-cn", "format": "binary",
+				"url": geoipCNURL, "download_detour": detour, "update_interval": "1d",
+			},
+		)
+	}
+
+	defaultMode := "Rule"
+	if s.RouteMode == "global" {
+		defaultMode = "Global"
+	}
+
+	cfg := config{
+		Log: &logCfg{Level: "info", Timestamp: true},
+		DNS: &dnsCfg{
+			Servers:          dnsServers,
+			Rules:            dnsRules,
+			Final:            "dns-proxy",
+			IndependentCache: true,
+		},
+		Inbounds:  inbounds,
+		Outbounds: outbounds,
+		Route: &routeCfg{
+			Rules:                 rules,
+			RuleSet:               ruleSets,
+			Final:                 "PROXY",
+			AutoDetectInterface:   true,
+			DefaultDomainResolver: map[string]any{"server": "dns-cn"},
+		},
+		Experimental: &expCfg{
+			CacheFile: map[string]any{
+				"enabled":      true,
+				"path":         dirs.CacheDB(),
+				"store_fakeip": true,
+				"store_rdrc":   true,
+			},
+			ClashAPI: map[string]any{
+				"external_controller":         s.ClashListen,
+				"external_ui":                 dirs.UIDir(),
+				"external_ui_download_url":    mirror(uiDownloadURL(s.ExternalUI)),
+				"external_ui_download_detour": detour,
+				"secret":                      s.ClashSecret,
+				"default_mode":                defaultMode,
+			},
+		},
+	}
+
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("生成 config.json 失败: %w", err)
+	}
+	return append(b, '\n'), nil
+}

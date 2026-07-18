@@ -1,0 +1,14 @@
+/ssb
+/bin/
+/data/
+/logs/
+/run/
+/config.json
+/config.json.bak
+/config.json.new
+/ssb-data/
+/ssb-logs/
+/ssb-run/
+/dist/
+.claude/
+*.swp
