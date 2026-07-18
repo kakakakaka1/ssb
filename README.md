@@ -10,6 +10,20 @@ sing-box 进程。TUI 节点页可直接切换出口；测速/看连接等交给
 - 订阅三格式自动识别：sing-box JSON / base64 链接列表 / Clash YAML（自动按 UA 退避重试）
 - 生成的配置**先过 `sing-box check` 再上线**，失败自动保留旧配置
 
+## 截图
+
+服务页——进程状态、当前出口与实时日志：
+
+![服务页](docs/tui-service.png)
+
+节点页——回车直接切换出口（● 为当前出口，手=手动添加、订=来自订阅）：
+
+![节点页](docs/tui-nodes.png)
+
+设置页——路由模式 / TUN / DNS / Dashboard 等，回车或空格修改：
+
+![设置页](docs/tui-settings.png)
+
 ## 快速开始（裸机，单目录）
 
 从 [Releases](../../releases) 下载对应架构的包，两种任选：
