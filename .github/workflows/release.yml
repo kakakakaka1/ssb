@@ -1,6 +1,8 @@
 # 打 tag（v*）自动构建并发布 Release：
 #   git tag v0.1.0 && git push origin v0.1.0
-# 产物：ssb-<版本>-linux-{amd64,arm64}.tar.gz + checksums.txt
+# 每架构两个产物 + checksums.txt：
+#   ssb-<版本>-linux-<arch>.tar.gz                精简包（首次运行 ./ssb install 下载内核）
+#   ssb-<版本>-linux-<arch>-with-singbox.tar.gz   完整包（附带 sing-box，解压即用）
 name: Release
 on:
   push:
@@ -8,6 +10,9 @@ on:
 
 permissions:
   contents: write # 允许内置 GITHUB_TOKEN 创建 Release
+
+env:
+  SINGBOX_VERSION: "1.13.12" # 完整包附带的内核版本，与 Dockerfile 保持一致
 
 jobs:
   release:
@@ -23,12 +28,20 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p dist
           for arch in amd64 arm64; do
+            stage="dist/stage-${arch}"
+            mkdir -p "${stage}/data"
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
               go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-              -o dist/ssb ./cmd/ssb
+              -o "${stage}/ssb" ./cmd/ssb
+            cp README.md "${stage}/"
             tar -czf "dist/ssb-${VERSION}-linux-${arch}.tar.gz" \
-              -C dist ssb -C "$GITHUB_WORKSPACE" README.md
-            rm dist/ssb
+              -C "$stage" ssb README.md
+            curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${arch}.tar.gz" \
+              | tar -xz -C "${stage}/data" --strip-components=1 \
+                  "sing-box-${SINGBOX_VERSION}-linux-${arch}/sing-box"
+            tar -czf "dist/ssb-${VERSION}-linux-${arch}-with-singbox.tar.gz" \
+              -C "$stage" ssb data/sing-box README.md
+            rm -rf "$stage"
           done
           cd dist && sha256sum *.tar.gz > checksums.txt
       - name: Create release

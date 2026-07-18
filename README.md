@@ -12,10 +12,13 @@ metacubexd/zashboard/yacd，浏览器访问）。
 
 ## 快速开始（裸机，单目录）
 
+从 [Releases](../../releases) 下载对应架构的包，两种任选：
+
+- `ssb-<版本>-linux-<arch>-with-singbox.tar.gz` —— **完整包，自带 sing-box 内核，解压即用**
+- `ssb-<版本>-linux-<arch>.tar.gz` —— 精简包，解压后先 `./ssb install` 下载内核（或自行复制到 `data/sing-box`）
+
 ```bash
-mkdir -p ~/ssb && cd ~/ssb
-# 放入 ssb 二进制（自行编译：go build -o ssb ./cmd/ssb）
-./ssb install                 # 下载 sing-box 内核到 ./data/（或自行下载后复制到 data/sing-box）
+mkdir -p ~/ssb && tar -xzf ssb-*-with-singbox.tar.gz -C ~/ssb && cd ~/ssb
 ./ssb add "vless://…" "anytls://…"      # 添加节点，或：
 ./ssb sub add https://example.com/sub 我的机场   # 添加订阅
 ./ssb doctor                  # 体检：TUN 权限 / 端口 / DNS
