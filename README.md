@@ -10,20 +10,6 @@ metacubexd/zashboard/yacd）可在设置中开启（默认关闭）。
 - 订阅三格式自动识别：sing-box JSON / base64 链接列表 / Clash YAML（自动按 UA 退避重试）
 - 生成的配置**先过 `sing-box check` 再上线**，失败自动保留旧配置
 
-## 截图
-
-服务页——进程状态、当前出口与实时日志：
-
-![服务页](docs/tui-service.png)
-
-节点页——回车直接切换出口（● 为当前出口，手=手动添加、订=来自订阅）：
-
-![节点页](docs/tui-nodes.png)
-
-设置页——路由模式 / TUN / DNS / Dashboard 等，回车或空格修改：
-
-![设置页](docs/tui-settings.png)
-
 ## 快速开始（裸机，单目录）
 
 从 [Releases](../../releases) 下载对应架构的包，两种任选：
@@ -42,7 +28,7 @@ sudo ./ssb start              # TUN 需要 root；或先 sudo setcap cap_net_adm
 
 无参数运行 `./ssb` 进入 TUI（服务/订阅/节点/设置 四页签）。
 
-推荐 `sudo ./ssb` 然后开启tun，体验最佳。
+**推荐 `sudo ./ssb` 然后开启tun，体验最佳。**
 
 不想用 TUN（免 root）：TUI 设置页关掉 TUN，走本地 mixed 端口
 `socks5://127.0.0.1:2080`。
@@ -58,6 +44,20 @@ docker compose run --rm ssb dashboard
 
 TUN 要接管宿主流量，容器必须 `network_mode: host` + `cap_add: NET_ADMIN` +
 映射 `/dev/net/tun`（compose 已配好）。
+
+## 截图
+
+服务页——进程状态、当前出口与实时日志：
+
+![服务页](docs/tui-service.png)
+
+节点页——回车直接切换出口（● 为当前出口，手=手动添加、订=来自订阅）：
+
+![节点页](docs/tui-nodes.png)
+
+设置页——路由模式 / TUN / DNS / Dashboard 等，回车或空格修改：
+
+![设置页](docs/tui-settings.png)
 
 ## 订阅自动更新（cron）
 
