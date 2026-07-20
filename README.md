@@ -42,6 +42,8 @@ sudo ./ssb start              # TUN 需要 root；或先 sudo setcap cap_net_adm
 
 无参数运行 `./ssb` 进入 TUI（服务/订阅/节点/设置 四页签）。
 
+推荐 `sudo ./ssb` 然后开启tun，体验最佳。
+
 不想用 TUN（免 root）：TUI 设置页关掉 TUN，走本地 mixed 端口
 `socks5://127.0.0.1:2080`。
 
