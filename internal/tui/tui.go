@@ -419,7 +419,7 @@ func (m model) keysNodes(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keysSettings(key string) (tea.Model, tea.Cmd) {
-	rows := settingRows()
+	rows := settingRows(m.a)
 	switch key {
 	case "j", "down":
 		if m.setCursor < len(rows)-1 {
@@ -433,6 +433,10 @@ func (m model) keysSettings(key string) (tea.Model, tea.Cmd) {
 		row := rows[m.setCursor]
 		if row.cycle != nil { // 开关/枚举：直接轮转
 			row.cycle(m.a)
+			// 高级分流收起后行数变少，光标别越界
+			if n := len(settingRows(m.a)); m.setCursor >= n {
+				m.setCursor = n - 1
+			}
 			if err := m.a.Save(); err != nil {
 				m.flash, m.flashE = err.Error(), true
 				return m, nil
@@ -471,14 +475,14 @@ type settingRow struct {
 	cycle func(*app.App) // 非 nil 表示回车轮转（bool / 枚举）
 }
 
-func settingRows() []settingRow {
+func settingRows(a *app.App) []settingRow {
 	boolStr := func(b bool) string {
 		if b {
 			return "开"
 		}
 		return "关"
 	}
-	return []settingRow{
+	rows := []settingRow{
 		{label: "路由模式（rule=绕过大陆 / global=全代理）",
 			get: func(a *app.App) string { return a.State.Settings.RouteMode },
 			cycle: func(a *app.App) {
@@ -552,7 +556,69 @@ func settingRows() []settingRow {
 		{label: "sing-box 路径（空=自动：data/ 或 PATH）",
 			get: func(a *app.App) string { return a.State.Settings.SingboxPath },
 			set: func(a *app.App, v string) error { a.State.Settings.SingboxPath = v; return nil }},
+		{label: "日志级别（warn 防日志膨胀）",
+			get: func(a *app.App) string { return a.State.Settings.LogLevel },
+			cycle: func(a *app.App) {
+				s := &a.State.Settings
+				order := []string{"warn", "info", "debug", "error"}
+				next := order[0]
+				for i, l := range order {
+					if l == s.LogLevel {
+						next = order[(i+1)%len(order)]
+						break
+					}
+				}
+				s.LogLevel = next
+			}},
+		{label: "高级：自定义分流（展开后可编辑）",
+			get:   func(a *app.App) string { return boolStr(a.State.Settings.AdvancedRouting) },
+			cycle: func(a *app.App) { a.State.Settings.AdvancedRouting = !a.State.Settings.AdvancedRouting }},
 	}
+	if a.State.Settings.AdvancedRouting {
+		rows = append(rows,
+			settingRow{label: " ↳ 强制代理域名（含子域名，逗号分隔）",
+				get: func(a *app.App) string { return strings.Join(a.State.Settings.CustomProxy, ", ") },
+				set: func(a *app.App, v string) error {
+					list, err := parseDomains(v)
+					if err != nil {
+						return err
+					}
+					a.State.Settings.CustomProxy = list
+					return nil
+				}},
+			settingRow{label: " ↳ 强制直连域名（含子域名，逗号分隔）",
+				get: func(a *app.App) string { return strings.Join(a.State.Settings.CustomDirect, ", ") },
+				set: func(a *app.App, v string) error {
+					list, err := parseDomains(v)
+					if err != nil {
+						return err
+					}
+					a.State.Settings.CustomDirect = list
+					return nil
+				}},
+		)
+	}
+	return rows
+}
+
+// parseDomains splits a comma/space separated domain list and validates it.
+// 以点开头的条目（如 ".cn"）只匹配子域名/后缀，其余匹配自身+子域名。
+func parseDomains(v string) ([]string, error) {
+	fields := strings.FieldsFunc(v, func(r rune) bool {
+		return r == ',' || r == '，' || r == ';' || r == '；' || r == ' ' || r == '\t'
+	})
+	var out []string
+	for _, f := range fields {
+		d := strings.ToLower(strings.TrimSpace(f))
+		if d == "" {
+			continue
+		}
+		if strings.ContainsAny(d, "/:") {
+			return nil, fmt.Errorf("%q 不是域名：请填 example.com 这样的裸域名（不带协议/端口/路径）", d)
+		}
+		out = append(out, d)
+	}
+	return out, nil
 }
 
 // ---- view ----
@@ -714,7 +780,7 @@ func (m model) viewNodes() string {
 
 func (m model) viewSettings() string {
 	var b strings.Builder
-	for i, row := range settingRows() {
+	for i, row := range settingRows(m.a) {
 		cursor := "  "
 		st := lipgloss.NewStyle()
 		if i == m.setCursor {

@@ -81,8 +81,11 @@ func TestBuildRuleMode(t *testing.T) {
 	if capi["secret"] == "" || capi["external_controller"] != "127.0.0.1:9090" {
 		t.Fatalf("clash_api 错误: %v", capi)
 	}
-	if !strings.Contains(capi["external_ui_download_url"].(string), "metacubexd") {
-		t.Fatal("默认 Dashboard 应为 metacubexd")
+	if _, has := capi["external_ui"]; has {
+		t.Fatal("Dashboard 默认应关闭（不应有 external_ui）")
+	}
+	if m["log"].(map[string]any)["level"] != "warn" {
+		t.Fatal("日志级别默认应为 warn")
 	}
 
 	inb := m["inbounds"].([]any)
@@ -146,9 +149,85 @@ func TestDashboardOff(t *testing.T) {
 	}
 }
 
+func TestDashboardOn(t *testing.T) {
+	st := testState(t)
+	st.Settings.DashboardOff = false
+	m := build(t, st)
+	capi := m["experimental"].(map[string]any)["clash_api"].(map[string]any)
+	if !strings.Contains(capi["external_ui_download_url"].(string), "metacubexd") {
+		t.Fatalf("开启面板后应有 metacubexd 下载地址: %v", capi)
+	}
+}
+
+func TestCustomRouting(t *testing.T) {
+	st := testState(t)
+	st.Settings.CustomProxy = []string{"openai.com"}
+	st.Settings.CustomDirect = []string{"steamcdn.example.com", ".edu.cn"}
+	m := build(t, st)
+
+	rules := m["route"].(map[string]any)["rules"].([]any)
+	proxyIdx, directIdx, geoIdx := -1, -1, -1
+	for i, r := range rules {
+		rm := r.(map[string]any)
+		if d, ok := rm["domain"].([]any); ok && len(d) > 0 && d[0] == "openai.com" {
+			proxyIdx = i
+			if rm["outbound"] != "PROXY" {
+				t.Fatalf("强制代理规则出站错误: %v", rm)
+			}
+			if sfx := rm["domain_suffix"].([]any); sfx[0] != ".openai.com" {
+				t.Fatalf("应自动补子域名后缀: %v", sfx)
+			}
+		}
+		if d, ok := rm["domain"].([]any); ok && len(d) > 0 && d[0] == "steamcdn.example.com" {
+			directIdx = i
+			if rm["outbound"] != "direct" {
+				t.Fatalf("强制直连规则出站错误: %v", rm)
+			}
+			// ".edu.cn" 以点开头，只做后缀
+			found := false
+			for _, s := range rm["domain_suffix"].([]any) {
+				if s == ".edu.cn" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("缺少 .edu.cn 后缀: %v", rm)
+			}
+		}
+		if rs, ok := rm["rule_set"].([]any); ok && len(rs) > 0 && rs[0] == "geosite-cn" && geoIdx == -1 {
+			geoIdx = i
+		}
+	}
+	if proxyIdx == -1 || directIdx == -1 || geoIdx == -1 {
+		t.Fatalf("缺少规则: proxy=%d direct=%d geo=%d", proxyIdx, directIdx, geoIdx)
+	}
+	if !(proxyIdx < directIdx && directIdx < geoIdx) {
+		t.Fatalf("自定义规则应排在 geosite 之前且代理优先: proxy=%d direct=%d geo=%d", proxyIdx, directIdx, geoIdx)
+	}
+
+	// DNS 规则同样注入：强制代理域名走 fakeip（默认开启 FakeIP），直连走 dns-cn
+	dnsRules := m["dns"].(map[string]any)["rules"].([]any)
+	sawProxy, sawDirect := false, false
+	for _, r := range dnsRules {
+		rm := r.(map[string]any)
+		if d, ok := rm["domain"].([]any); ok && len(d) > 0 {
+			switch d[0] {
+			case "openai.com":
+				sawProxy = rm["server"] == "dns-fakeip"
+			case "steamcdn.example.com":
+				sawDirect = rm["server"] == "dns-cn"
+			}
+		}
+	}
+	if !sawProxy || !sawDirect {
+		t.Fatalf("DNS 自定义规则缺失: proxy=%v direct=%v", sawProxy, sawDirect)
+	}
+}
+
 func TestRuleSetCDNAndMirrorPrefix(t *testing.T) {
 	st := testState(t)
 	st.Settings.MirrorPrefix = "https://ghproxy.net/"
+	st.Settings.DashboardOff = false
 	m := build(t, st)
 
 	// 规则集固定走 testingcf.jsdelivr.net，不受镜像前缀影响

@@ -17,21 +17,25 @@ import (
 
 // Settings are user-tunable knobs surfaced in the TUI 设置页.
 type Settings struct {
-	RouteMode      string `json:"route_mode"`      // "rule"（绕过大陆）| "global"
-	TunEnabled     bool   `json:"tun_enabled"`     // TUN 入站（需要 root/CAP_NET_ADMIN）
-	AutoRedirect   bool   `json:"auto_redirect"`   // Linux nftables 加速（默认关，兼容性优先）
-	MixedEnabled   bool   `json:"mixed_enabled"`   // 本地 mixed(socks/http) 入站
-	MixedPort      int    `json:"mixed_port"`      // 默认 2080
-	ClashListen    string `json:"clash_listen"`    // clash_api external_controller
-	ClashSecret    string `json:"clash_secret"`    // 首次生成随机值
-	ExternalUI     string `json:"external_ui"`     // metacubexd | zashboard | yacd
-	DashboardOff   bool   `json:"dashboard_off"`   // 关闭网页面板（clash_api 仍监听，TUI 切换节点用）
-	MirrorPrefix   string `json:"mirror_prefix"`   // GitHub 镜像前缀（UI/内核下载用），如 https://ghproxy.net/
-	FakeIP         bool   `json:"fakeip"`          // FakeIP DNS
-	DownloadDetour string `json:"download_detour"` // 规则集/UI 下载出站: direct | PROXY
-	DNSCN          string `json:"dns_cn"`          // 国内直连 DNS（udp）
-	DNSProxy       string `json:"dns_proxy"`       // 代理侧 DNS（https）
-	SingboxPath    string `json:"singbox_path"`    // 手动指定 sing-box 路径（可空）
+	RouteMode       string   `json:"route_mode"`              // "rule"（绕过大陆）| "global"
+	TunEnabled      bool     `json:"tun_enabled"`             // TUN 入站（需要 root/CAP_NET_ADMIN）
+	AutoRedirect    bool     `json:"auto_redirect"`           // Linux nftables 加速（默认关，兼容性优先）
+	MixedEnabled    bool     `json:"mixed_enabled"`           // 本地 mixed(socks/http) 入站
+	MixedPort       int      `json:"mixed_port"`              // 默认 2080
+	ClashListen     string   `json:"clash_listen"`            // clash_api external_controller
+	ClashSecret     string   `json:"clash_secret"`            // 首次生成随机值
+	ExternalUI      string   `json:"external_ui"`             // metacubexd | zashboard | yacd
+	DashboardOff    bool     `json:"dashboard_off"`           // 关闭网页面板（clash_api 仍监听，TUI 切换节点用）
+	MirrorPrefix    string   `json:"mirror_prefix"`           // GitHub 镜像前缀（UI/内核下载用），如 https://ghproxy.net/
+	FakeIP          bool     `json:"fakeip"`                  // FakeIP DNS
+	DownloadDetour  string   `json:"download_detour"`         // 规则集/UI 下载出站: direct | PROXY
+	DNSCN           string   `json:"dns_cn"`                  // 国内直连 DNS（udp）
+	DNSProxy        string   `json:"dns_proxy"`               // 代理侧 DNS（https）
+	SingboxPath     string   `json:"singbox_path"`            // 手动指定 sing-box 路径（可空）
+	LogLevel        string   `json:"log_level"`               // sing-box 日志级别（默认 warn，防日志膨胀）
+	AdvancedRouting bool     `json:"advanced_routing"`        // 设置页显示自定义分流
+	CustomProxy     []string `json:"custom_proxy,omitempty"`  // 强制走代理的域名（含子域名）
+	CustomDirect    []string `json:"custom_direct,omitempty"` // 强制直连的域名（含子域名）
 }
 
 // Subscription is one remote subscription and its last fetch result.
@@ -61,10 +65,12 @@ func defaultSettings() Settings {
 		ClashListen:    "127.0.0.1:9090",
 		ClashSecret:    randomSecret(),
 		ExternalUI:     "metacubexd",
+		DashboardOff:   true, // 默认只用 TUI/clash_api，网页面板按需开启
 		FakeIP:         true,
 		DownloadDetour: "direct",
 		DNSCN:          "223.5.5.5",
 		DNSProxy:       "8.8.8.8",
+		LogLevel:       "warn",
 	}
 }
 
@@ -137,6 +143,9 @@ func Load(d Dirs) (*State, error) {
 	}
 	if st.Settings.DNSProxy == "" {
 		st.Settings.DNSProxy = "8.8.8.8"
+	}
+	if st.Settings.LogLevel == "" {
+		st.Settings.LogLevel = "warn"
 	}
 	return st, nil
 }

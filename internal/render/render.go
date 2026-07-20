@@ -6,6 +6,7 @@ package render
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"ssb/internal/profile"
 )
@@ -66,6 +67,35 @@ func uiDownloadURL(name string) string {
 	}
 }
 
+// splitDomainRule turns user domain entries into sing-box matchers:
+// "example.com" → 精确 + ".example.com" 子域名；以点开头的条目只做后缀匹配。
+func splitDomainRule(list []string) (exact, suffix []string) {
+	for _, d := range list {
+		if strings.HasPrefix(d, ".") {
+			suffix = append(suffix, d)
+			continue
+		}
+		exact = append(exact, d)
+		suffix = append(suffix, "."+d)
+	}
+	return
+}
+
+func customRule(domains []string, extra map[string]any) map[string]any {
+	exact, suffix := splitDomainRule(domains)
+	r := map[string]any{}
+	if len(exact) > 0 {
+		r["domain"] = exact
+	}
+	if len(suffix) > 0 {
+		r["domain_suffix"] = suffix
+	}
+	for k, v := range extra {
+		r[k] = v
+	}
+	return r
+}
+
 // Build renders config.json bytes for the current state.
 func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 	s := st.Settings
@@ -119,6 +149,17 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 	}
 	var dnsRules []any
 	dnsRules = append(dnsRules, map[string]any{"clash_mode": "Direct", "server": "dns-cn"})
+	// 自定义分流（高级设置）：优先级高于 geosite-cn
+	if len(s.CustomProxy) > 0 {
+		server := "dns-proxy"
+		if s.FakeIP {
+			server = "dns-fakeip"
+		}
+		dnsRules = append(dnsRules, customRule(s.CustomProxy, map[string]any{"server": server}))
+	}
+	if len(s.CustomDirect) > 0 {
+		dnsRules = append(dnsRules, customRule(s.CustomDirect, map[string]any{"server": "dns-cn"}))
+	}
 	if s.RouteMode != "global" {
 		dnsRules = append(dnsRules, map[string]any{"rule_set": "geosite-cn", "server": "dns-cn"})
 	}
@@ -162,6 +203,13 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 		map[string]any{"clash_mode": "Direct", "outbound": "direct"},
 		map[string]any{"clash_mode": "Global", "outbound": "PROXY"},
 	}
+	// 自定义分流（高级设置）：排在 geosite/geoip 之前，可覆盖默认分流
+	if len(s.CustomProxy) > 0 {
+		rules = append(rules, customRule(s.CustomProxy, map[string]any{"outbound": "PROXY"}))
+	}
+	if len(s.CustomDirect) > 0 {
+		rules = append(rules, customRule(s.CustomDirect, map[string]any{"outbound": "direct"}))
+	}
 	var ruleSets []any
 	needCN := s.RouteMode != "global"
 	if needCN {
@@ -197,8 +245,12 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 		clashAPI["external_ui_download_detour"] = detour
 	}
 
+	logLevel := s.LogLevel
+	if logLevel == "" {
+		logLevel = "warn"
+	}
 	cfg := config{
-		Log: &logCfg{Level: "info", Timestamp: true},
+		Log: &logCfg{Level: logLevel, Timestamp: true},
 		DNS: &dnsCfg{
 			Servers:          dnsServers,
 			Rules:            dnsRules,

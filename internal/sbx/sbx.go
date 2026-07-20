@@ -183,6 +183,10 @@ func Start(bin string, d profile.Dirs) error {
 	if err := d.Ensure(); err != nil {
 		return err
 	}
+	// 日志轮转：超过 8MB 就换名保留一份，防止长期运行占满磁盘
+	if fi, err := os.Stat(d.LogFile()); err == nil && fi.Size() > 8<<20 {
+		_ = os.Rename(d.LogFile(), d.LogFile()+".1")
+	}
 	logf, err := os.OpenFile(d.LogFile(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err

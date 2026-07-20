@@ -2,8 +2,8 @@
 
 单二进制 TUI/CLI 工具：把节点分享链接（`vless://`、`anytls://` 等）和订阅链接变成
 sing-box 可直接运行的 `config.json`（默认 **TUN + FakeIP + 规则分流**），并托管
-sing-box 进程。TUI 节点页可直接切换出口；测速/看连接等交给 **官方 Dashboard**
-（clash_api + metacubexd/zashboard/yacd，浏览器访问，不需要可在设置中关闭）。
+sing-box 进程。TUI 节点页直接切换出口；需要网页面板（clash_api +
+metacubexd/zashboard/yacd）可在设置中开启（默认关闭）。
 
 - **不污染系统**：所有东西（工具、sing-box 内核、配置、状态、日志）都在一个目录里，卸载 = 删目录
 - 支持协议：VLESS（含 REALITY/Vision）、AnyTLS、Shadowsocks（含 2022）、VMess、Trojan、Hysteria2、TUIC
@@ -63,16 +63,34 @@ TUN 要接管宿主流量，容器必须 `network_mode: host` + `cap_add: NET_AD
 0 5 * * * cd ~/ssb && ./ssb sub update && sudo ./ssb restart
 ```
 
-## Dashboard
+## Dashboard（可选）
 
-sing-box 首次启动会按配置里的 `external_ui_download_url` 自动把 Dashboard 下载到
-`data/ui/`（默认 metacubexd，可在设置页换 zashboard / yacd；国内可配 GitHub
-镜像前缀加速）。访问 `./ssb dashboard` 打印的地址；要在局域网其他设备访问，把
-设置里的 clash_api 监听改成 `0.0.0.0:9090`（secret 已默认随机生成）。
+**默认关闭**：日常切换出口在 TUI 节点页回车即可（选择由 cache_file 持久化，
+重启不丢），clash_api 仅监听 127.0.0.1 供本机控制。
 
-不想用网页面板：设置页把「Dashboard 网页面板」关掉即可——clash_api 仍监听
-（默认仅 127.0.0.1，供本机控制），TUI 节点页回车切换出口、A 切回自动测速，
-所选出口由 sing-box 的 cache_file 持久化，重启不丢。
+需要网页面板（测速、看连接、更细的策略组操作）时，在设置页打开
+「Dashboard 网页面板」并 r 重启——sing-box 首次启动会按
+`external_ui_download_url` 自动把面板下载到 `data/ui/`（默认 metacubexd，
+可换 zashboard / yacd；国内可配 GitHub 镜像前缀加速）。访问 `./ssb dashboard`
+打印的地址；要在局域网其他设备访问，把 clash_api 监听改成
+`0.0.0.0:9090`（secret 已默认随机生成）。
+
+## 自定义分流（高级）
+
+默认规则：**国内域名/IP（geosite-cn / geoip-cn）直连，其余走代理**。需要例外时，
+在设置页最底部打开「高级：自定义分流」，会多出两行：
+
+- **强制代理域名**：例如 `openai.com`（自动含子域名）——即使命中国内规则也走代理
+- **强制直连域名**：例如 `steamcdn.example.com` 或 `.edu.cn`（点开头=仅按后缀匹配）
+
+逗号分隔多个域名，优先级高于内置规则，DNS 解析也会同步分流（直连域名用国内
+DNS 拿真实 IP）。改完 g 生成、r 重启生效。
+
+## 日志
+
+`logs/sing-box.log` 默认 `warn` 级别（连接级 INFO 噪音大、涨得快；排查问题时在
+设置页临时调回 `info`/`debug`）。每次启动若日志超过 8MB 会轮转为
+`sing-box.log.1`（只保留一份）。
 
 ## 权限说明（TUN）
 
