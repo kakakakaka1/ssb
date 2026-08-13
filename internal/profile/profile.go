@@ -19,6 +19,7 @@ import (
 type Settings struct {
 	RouteMode       string   `json:"route_mode"`              // "rule"（绕过大陆）| "global"
 	TunEnabled      bool     `json:"tun_enabled"`             // TUN 入站（需要 root/CAP_NET_ADMIN）
+	IPv6            string   `json:"ipv6"`                    // auto（按内核探测）| on | off；内核关掉 IPv6 时必须 off
 	AutoRedirect    bool     `json:"auto_redirect"`           // Linux nftables 加速（默认关，兼容性优先）
 	MixedEnabled    bool     `json:"mixed_enabled"`           // 本地 mixed(socks/http) 入站
 	MixedPort       int      `json:"mixed_port"`              // 默认 2080
@@ -59,6 +60,7 @@ func defaultSettings() Settings {
 	return Settings{
 		RouteMode:      "rule",
 		TunEnabled:     true,
+		IPv6:           "auto",
 		AutoRedirect:   false,
 		MixedEnabled:   true,
 		MixedPort:      2080,
@@ -146,6 +148,9 @@ func Load(d Dirs) (*State, error) {
 	}
 	if st.Settings.LogLevel == "" {
 		st.Settings.LogLevel = "warn"
+	}
+	if st.Settings.IPv6 == "" {
+		st.Settings.IPv6 = "auto"
 	}
 	return st, nil
 }

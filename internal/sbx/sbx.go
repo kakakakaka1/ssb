@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"ssb/internal/profile"
+	"ssb/internal/render"
 )
 
 // Locate returns the sing-box binary path, trying in order:
@@ -211,9 +212,24 @@ func Start(bin string, d profile.Dirs) error {
 	time.Sleep(1200 * time.Millisecond)
 	if err := syscall.Kill(pid, 0); err != nil {
 		os.Remove(d.PidFile())
-		return fmt.Errorf("sing-box 启动即退出，日志尾部：\n%s", tailFile(d.LogFile(), 15))
+		tail := tailFile(d.LogFile(), 15)
+		return fmt.Errorf("sing-box 启动即退出，日志尾部：\n%s%s", tail, startHint(tail))
 	}
 	return nil
+}
+
+// startHint turns 常见的内核/权限报错 into 一句可执行的中文建议，附在启动失败信息后面。
+func startHint(logTail string) string {
+	switch {
+	case strings.Contains(logTail, "address family not supported by protocol"):
+		return "\n提示：内核不支持 IPv6 策略路由（启动参数 ipv6.disable=1，或内核缺 CONFIG_IPV6 / CONFIG_IPV6_MULTIPLE_TABLES）。\n" +
+			"     在 TUI 设置页把「IPv6」改成 off，再 ./ssb gen 重新生成配置即可（也可以恢复内核 IPv6）。"
+	case strings.Contains(logTail, "operation not permitted"), strings.Contains(logTail, "permission denied"):
+		return "\n提示：TUN 需要 root 或 CAP_NET_ADMIN，用 sudo ./ssb start，或按 ./ssb doctor 的提示 setcap。"
+	case strings.Contains(logTail, "address already in use"):
+		return "\n提示：端口被占用，换 mixed / clash_api 端口或停掉占用者（./ssb doctor 会指出是谁）。"
+	}
+	return ""
 }
 
 // Stop sends SIGTERM (then SIGKILL after 5s) to the recorded pid.
@@ -362,6 +378,8 @@ func Doctor(d profile.Dirs, st *profile.State) []CheckResult {
 					"非 root 且二进制无 CAP_NET_ADMIN。二选一：sudo ./ssb start；或一次性授权（只改本目录文件）: sudo setcap cap_net_admin+ep "+bin)
 			}
 		}
+		name, ok, detail := ipv6Check(st.Settings.IPv6)
+		add(name, ok, detail)
 	}
 
 	for _, p := range []struct{ name, addr string }{
@@ -396,4 +414,44 @@ func Doctor(d profile.Dirs, st *profile.State) []CheckResult {
 		add("config.json", false, "尚未生成（添加节点/订阅后自动生成，或运行 ./ssb gen）")
 	}
 	return out
+}
+
+// ipv6Check compares 内核 IPv6 能力 与 settings.ipv6，这是启动报
+// "add rule N/M: address family not supported by protocol" 的唯一来源：
+// sing-box 的 auto_route 要下 AF_INET6 策略路由，内核没有 IPv6（或没有 IPv6
+// 策略路由）就会被拒绝。
+func ipv6Check(mode string) (name string, ok bool, detail string) {
+	name = "IPv6"
+	if mode == "" {
+		mode = "auto"
+	}
+	kernel := render.HostHasIPv6()
+	switch {
+	case mode == "off":
+		return name, true, "设置为 off：TUN 只配 IPv4、不开 strict_route（无 IPv6 内核的正确选择）"
+	case !kernel && mode == "on":
+		return name, false, "内核没有 IPv6（无 /proc/net/if_inet6），但设置里 IPv6=on —— TUN 会启动失败，请改回 auto 或 off"
+	case !kernel:
+		return name, true, "内核没有 IPv6，auto 已自动降级为纯 IPv4"
+	case ipv6RuleSupported() == 0:
+		return name, false, "内核有 IPv6 但不支持 IPv6 策略路由（缺 CONFIG_IPV6_MULTIPLE_TABLES），auto 探测不到 —— 请把设置里的 IPv6 改成 off，再 ./ssb gen"
+	default:
+		return name, true, "内核支持 IPv6（当前设置 " + mode + "）"
+	}
+}
+
+// ipv6RuleSupported probes `ip -6 rule`: 1 支持 / 0 不支持 / -1 判断不了（没装 iproute2）。
+func ipv6RuleSupported() int {
+	ip, err := exec.LookPath("ip")
+	if err != nil {
+		return -1
+	}
+	out, err := exec.Command(ip, "-6", "rule", "show").CombinedOutput()
+	if err == nil {
+		return 1
+	}
+	if strings.Contains(strings.ToLower(string(out)), "not supported") {
+		return 0
+	}
+	return -1
 }

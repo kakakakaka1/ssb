@@ -100,6 +100,7 @@ func customRule(domains []string, extra map[string]any) map[string]any {
 func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 	s := st.Settings
 	nodes := st.AllNodes()
+	v6 := useIPv6(s.IPv6) // 内核没有 IPv6 时全程降级为纯 IPv4，见 ipv6.go
 
 	mirror := func(u string) string { return s.MirrorPrefix + u }
 	detour := s.DownloadDetour
@@ -148,6 +149,12 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 		map[string]any{"type": "https", "tag": "dns-proxy", "server": s.DNSProxy, "detour": "PROXY"},
 	}
 	var dnsRules []any
+	if !v6 {
+		// 没有 IPv6 栈：AAAA 直接回空 NOERROR，免得程序拿到一个根本连不上的 v6 地址干等超时
+		dnsRules = append(dnsRules, map[string]any{
+			"query_type": []string{"AAAA"}, "action": "predefined", "rcode": "NOERROR",
+		})
+	}
 	dnsRules = append(dnsRules, map[string]any{"clash_mode": "Direct", "server": "dns-cn"})
 	// 自定义分流（高级设置）：优先级高于 geosite-cn
 	if len(s.CustomProxy) > 0 {
@@ -164,23 +171,34 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 		dnsRules = append(dnsRules, map[string]any{"rule_set": "geosite-cn", "server": "dns-cn"})
 	}
 	if s.FakeIP {
-		dnsServers = append(dnsServers, map[string]any{
+		fake := map[string]any{
 			"type": "fakeip", "tag": "dns-fakeip",
 			"inet4_range": "198.18.0.0/15",
-			"inet6_range": "fc00::/18",
-		})
-		dnsRules = append(dnsRules, map[string]any{"query_type": []string{"A", "AAAA"}, "server": "dns-fakeip"})
+		}
+		qtype := []string{"A"}
+		if v6 {
+			fake["inet6_range"] = "fc00::/18"
+			qtype = append(qtype, "AAAA")
+		}
+		dnsServers = append(dnsServers, fake)
+		dnsRules = append(dnsRules, map[string]any{"query_type": qtype, "server": "dns-fakeip"})
 	}
 
 	// ---- inbounds ----
 	var inbounds []any
 	if s.TunEnabled {
+		addrs := []string{"172.19.0.1/30"}
+		if v6 {
+			addrs = append(addrs, "fdfe:dcba:9876::1/126")
+		}
 		tun := map[string]any{
 			"type": "tun", "tag": "tun-in",
-			"address":      []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"},
-			"mtu":          9000,
-			"auto_route":   true,
-			"strict_route": true,
+			"address":    addrs,
+			"mtu":        9000,
+			"auto_route": true,
+			// strict_route 只在有 IPv6 时开：没有 v6 地址时 sing-tun 会补一条
+			// AF_INET6 unreachable 策略路由，在无 IPv6 内核上直接 EAFNOSUPPORT 启动失败。
+			"strict_route": v6,
 			"stack":        "mixed",
 		}
 		if s.AutoRedirect {

@@ -496,6 +496,19 @@ func settingRows(a *app.App) []settingRow {
 		{label: "TUN 透明代理（需 root/CAP_NET_ADMIN）",
 			get:   func(a *app.App) string { return boolStr(a.State.Settings.TunEnabled) },
 			cycle: func(a *app.App) { a.State.Settings.TunEnabled = !a.State.Settings.TunEnabled }},
+		{label: "IPv6（auto=探测内核 / on / off）",
+			get: func(a *app.App) string { return a.State.Settings.IPv6 },
+			cycle: func(a *app.App) {
+				s := &a.State.Settings
+				switch s.IPv6 {
+				case "auto":
+					s.IPv6 = "on"
+				case "on":
+					s.IPv6 = "off"
+				default:
+					s.IPv6 = "auto"
+				}
+			}},
 		{label: "auto_redirect（Linux nftables 加速）",
 			get:   func(a *app.App) string { return boolStr(a.State.Settings.AutoRedirect) },
 			cycle: func(a *app.App) { a.State.Settings.AutoRedirect = !a.State.Settings.AutoRedirect }},

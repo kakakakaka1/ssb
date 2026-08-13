@@ -246,3 +246,82 @@ func TestRuleSetCDNAndMirrorPrefix(t *testing.T) {
 		t.Fatalf("UI 下载地址镜像前缀未生效: %s", ui)
 	}
 }
+
+// 内核关掉 IPv6 时（ipv6=off / auto 探测不到）配置必须是纯 IPv4：TUN 不配 v6 地址、
+// 不开 strict_route，否则 sing-box 下 AF_INET6 策略路由会 EAFNOSUPPORT 启动失败。
+func TestIPv6Off(t *testing.T) {
+	st := testState(t)
+	st.Settings.IPv6 = "off"
+	m := build(t, st)
+
+	tun := m["inbounds"].([]any)[0].(map[string]any)
+	addrs := tun["address"].([]any)
+	if len(addrs) != 1 || addrs[0] != "172.19.0.1/30" {
+		t.Fatalf("关闭 IPv6 后 TUN 只能有 IPv4 地址: %v", addrs)
+	}
+	if tun["strict_route"] != false {
+		t.Fatalf("关闭 IPv6 后必须关掉 strict_route: %v", tun["strict_route"])
+	}
+
+	dns := m["dns"].(map[string]any)
+	for _, s := range dns["servers"].([]any) {
+		sm := s.(map[string]any)
+		if sm["type"] == "fakeip" {
+			if _, has := sm["inet6_range"]; has {
+				t.Fatalf("关闭 IPv6 后 fakeip 不应有 inet6_range: %v", sm)
+			}
+		}
+	}
+	rules := dns["rules"].([]any)
+	first := rules[0].(map[string]any)
+	if first["action"] != "predefined" || first["query_type"].([]any)[0] != "AAAA" {
+		t.Fatalf("关闭 IPv6 后第一条 DNS 规则应拦掉 AAAA: %v", first)
+	}
+	for _, r := range rules {
+		rm := r.(map[string]any)
+		if rm["server"] != "dns-fakeip" {
+			continue
+		}
+		for _, q := range rm["query_type"].([]any) {
+			if q == "AAAA" {
+				t.Fatalf("关闭 IPv6 后 fakeip 不应接管 AAAA: %v", rm)
+			}
+		}
+	}
+}
+
+func TestIPv6On(t *testing.T) {
+	st := testState(t)
+	st.Settings.IPv6 = "on"
+	m := build(t, st)
+
+	tun := m["inbounds"].([]any)[0].(map[string]any)
+	if len(tun["address"].([]any)) != 2 || tun["strict_route"] != true {
+		t.Fatalf("ipv6=on 应保留 v6 地址与 strict_route: %v", tun)
+	}
+	for _, r := range m["dns"].(map[string]any)["rules"].([]any) {
+		if r.(map[string]any)["action"] == "predefined" {
+			t.Fatal("ipv6=on 不应拦截 AAAA")
+		}
+	}
+}
+
+// auto 跟随内核探测结果。
+func TestIPv6Auto(t *testing.T) {
+	old := HostHasIPv6
+	defer func() { HostHasIPv6 = old }()
+
+	HostHasIPv6 = func() bool { return false }
+	st := testState(t)
+	st.Settings.IPv6 = "auto"
+	tun := build(t, st)["inbounds"].([]any)[0].(map[string]any)
+	if len(tun["address"].([]any)) != 1 || tun["strict_route"] != false {
+		t.Fatalf("内核无 IPv6 时 auto 应降级为纯 IPv4: %v", tun)
+	}
+
+	HostHasIPv6 = func() bool { return true }
+	tun = build(t, st)["inbounds"].([]any)[0].(map[string]any)
+	if len(tun["address"].([]any)) != 2 || tun["strict_route"] != true {
+		t.Fatalf("内核有 IPv6 时 auto 应保留 v6: %v", tun)
+	}
+}

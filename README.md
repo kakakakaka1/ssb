@@ -102,6 +102,23 @@ TUN + auto_route 需要 `CAP_NET_ADMIN`，三选一：
 2. 一次性：`sudo setcap cap_net_admin+ep data/sing-box`（只改本目录文件），之后免 sudo
 3. 关闭 TUN 用 mixed 端口（免 root，但只代理显式走代理端口的应用）
 
+## IPv6
+
+设置页的「IPv6」默认 `auto`：生成配置时探测内核（`/proc/net/if_inet6`），
+内核关掉了 IPv6 就自动生成纯 IPv4 配置（TUN 不配 v6 地址、不开 `strict_route`、
+FakeIP 不分配 v6、AAAA 查询直接返回空）。
+
+如果启动报
+
+```
+FATAL start service: post-start inbound/tun[tun-in]: starting TUN interface:
+      set rules: add rule 2/16: address family not supported by protocol
+```
+
+说明内核下不了 IPv6 策略路由（启动参数 `ipv6.disable=1`，或内核缺
+`CONFIG_IPV6` / `CONFIG_IPV6_MULTIPLE_TABLES`；后者 auto 探测不到）。把「IPv6」
+改成 `off`，g 生成、r 重启即可；`./ssb doctor` 会指出属于哪一种。
+
 ## systemd-resolved 提示
 
 Ubuntu 等系统 `/etc/resolv.conf` 指向 127.0.0.53（systemd-resolved 存根）。
