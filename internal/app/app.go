@@ -75,9 +75,14 @@ func (a *App) Generate() (warn string, err error) {
 	}
 	bin, lerr := sbx.Locate(a.Dirs, &a.State.Settings)
 	if lerr == nil {
-		if cerr := sbx.Check(bin, tmp); cerr != nil {
+		cwarn, cerr := sbx.Check(bin, tmp)
+		if cerr != nil {
 			os.Remove(tmp)
 			return "", cerr
+		}
+		// check 退出码为 0 但仍可能打印弃用告警，直接透出，别让它烂在配置里
+		if cwarn != "" {
+			warn = "sing-box 对本配置有告警：\n" + cwarn
 		}
 	} else {
 		warn = "未找到 sing-box，本次跳过配置校验（" + lerr.Error() + "）"

@@ -224,6 +224,69 @@ func TestCustomRouting(t *testing.T) {
 	}
 }
 
+// sing-box 1.14 弃用项守卫：这些字段一旦回潮，内核会打 WARN 并在 1.16 直接报错。
+func TestNoDeprecated114Options(t *testing.T) {
+	st := testState(t)
+	m := build(t, st)
+
+	if _, has := m["dns"].(map[string]any)["independent_cache"]; has {
+		t.Fatal("independent_cache 在 1.14 已弃用，应删除")
+	}
+	cache := m["experimental"].(map[string]any)["cache_file"].(map[string]any)
+	if _, has := cache["store_rdrc"]; has {
+		t.Fatal("store_rdrc 在 1.14 已弃用，应改用 store_dns")
+	}
+	if cache["store_dns"] != true {
+		t.Fatalf("应启用 store_dns: %v", cache)
+	}
+	for _, rs := range m["route"].(map[string]any)["rule_set"].([]any) {
+		if _, has := rs.(map[string]any)["download_detour"]; has {
+			t.Fatal("rule_set.download_detour 在 1.14 已弃用，应改用 http_client")
+		}
+	}
+}
+
+// 1.14 的远程规则集必须显式绑定 http_client：不写的话下载会走 route.final
+// （PROXY）而不是直连，内核也会为这个隐式行为打弃用告警。
+func TestRuleSetHTTPClient(t *testing.T) {
+	st := testState(t)
+
+	// 直连下载：客户端只有 tag——显式 detour 到裸 direct 出站会被内核拒绝。
+	m := build(t, st)
+	clients := m["http_clients"].([]any)
+	if len(clients) != 1 {
+		t.Fatalf("应声明 1 个 http_client: %v", clients)
+	}
+	c := clients[0].(map[string]any)
+	tag, _ := c["tag"].(string)
+	if tag == "" {
+		t.Fatalf("http_client 缺少 tag: %v", c)
+	}
+	if _, has := c["detour"]; has {
+		t.Fatalf("直连下载不应写 detour（内核会拒绝指向裸 direct 的 detour）: %v", c)
+	}
+	for _, rs := range m["route"].(map[string]any)["rule_set"].([]any) {
+		if rs.(map[string]any)["http_client"] != tag {
+			t.Fatalf("规则集应引用 http_client %q: %v", tag, rs)
+		}
+	}
+
+	// 走代理下载：这时才写 detour
+	st.Settings.DownloadDetour = "PROXY"
+	m = build(t, st)
+	c = m["http_clients"].([]any)[0].(map[string]any)
+	if c["detour"] != "PROXY" {
+		t.Fatalf("代理下载应写 detour=PROXY: %v", c)
+	}
+
+	// global 模式没有规则集，也就不需要 http_client
+	st.Settings.RouteMode = "global"
+	m = build(t, st)
+	if _, has := m["http_clients"]; has {
+		t.Fatal("global 模式没有远程规则集，不应声明 http_clients")
+	}
+}
+
 func TestRuleSetCDNAndMirrorPrefix(t *testing.T) {
 	st := testState(t)
 	st.Settings.MirrorPrefix = "https://ghproxy.net/"

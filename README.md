@@ -149,8 +149,9 @@ go build -o ssb ./cmd/ssb
 go test ./...
 ```
 
-生成逻辑锁定 sing-box 1.13.x 语法（新版 DNS/route actions/rule-set）；任何生成结果
-都会先 `sing-box check`，与本机内核版本不符会在生成时立刻报错。
+生成逻辑锁定 sing-box 1.14.x 语法（新版 DNS server 格式、route actions、rule-set +
+http_clients）；任何生成结果都会先 `sing-box check`，与本机内核版本不符会在生成时
+立刻报错。内核若对配置有弃用告警，`gen` / `doctor` 也会一并提示。
 
 ## 许可
 

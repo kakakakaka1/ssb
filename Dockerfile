@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/ssb ./cmd/ssb
 # 直接从官方 release 取 sing-box 内核（TARGETARCH: amd64/arm64）
 FROM alpine:3.20 AS singbox
 ARG TARGETARCH
-ARG SINGBOX_VERSION=1.13.12
+ARG SINGBOX_VERSION=1.14.0
 RUN apk add --no-cache curl tar && \
     curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${TARGETARCH}.tar.gz" \
       | tar -xz -C /tmp && \

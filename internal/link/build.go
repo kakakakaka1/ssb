@@ -1,7 +1,7 @@
 package link
 
 // Shared builders for sing-box "tls" and "transport" blocks. Field names track
-// sing-box 1.13.x; the generated config is always validated by `sing-box check`.
+// sing-box 1.14.x; the generated config is always validated by `sing-box check`.
 
 // TLSOpts describes what a share link told us about TLS.
 type TLSOpts struct {

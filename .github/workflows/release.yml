@@ -12,7 +12,7 @@ permissions:
   contents: write # 允许内置 GITHUB_TOKEN 创建 Release
 
 env:
-  SINGBOX_VERSION: "1.13.12" # 完整包附带的内核版本，与 Dockerfile 保持一致
+  SINGBOX_VERSION: "1.14.0" # 完整包附带的内核版本，与 Dockerfile 保持一致
 
 jobs:
   release:

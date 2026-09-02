@@ -1,4 +1,4 @@
-// Package render generates the sing-box config.json (1.13.x schema):
+// Package render generates the sing-box config.json (1.14.x schema):
 // TUN + FakeIP + rule-set 分流 + clash_api Dashboard。
 // 生成结果始终交给 `sing-box check` 做最终校验。
 package render
@@ -19,6 +19,7 @@ type config struct {
 	Inbounds     []any     `json:"inbounds,omitempty"`
 	Outbounds    []any     `json:"outbounds,omitempty"`
 	Route        *routeCfg `json:"route,omitempty"`
+	HTTPClients  []any     `json:"http_clients,omitempty"`
 	Experimental *expCfg   `json:"experimental,omitempty"`
 }
 
@@ -28,10 +29,9 @@ type logCfg struct {
 }
 
 type dnsCfg struct {
-	Servers          []any  `json:"servers"`
-	Rules            []any  `json:"rules,omitempty"`
-	Final            string `json:"final,omitempty"`
-	IndependentCache bool   `json:"independent_cache,omitempty"`
+	Servers []any  `json:"servers"`
+	Rules   []any  `json:"rules,omitempty"`
+	Final   string `json:"final,omitempty"`
 }
 
 type routeCfg struct {
@@ -53,6 +53,11 @@ const (
 	geositeCNURL = "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/cn.srs"
 	geoipCNURL   = "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/cn.srs"
 )
+
+// httpClientTag names the shared HTTP client used for remote rule-set
+// downloads. sing-box 1.14 弃用了 rule_set 里的 download_detour，改为在顶层
+// http_clients 声明客户端、规则集用 http_client 引用。
+const httpClientTag = "http-download"
 
 // uiDownloadURL returns the dashboard artifact for external_ui_download_url.
 // 注意：sing-box 的下载器只支持 zip 归档（tgz 会报 "zip: not a valid zip file"）。
@@ -229,22 +234,33 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 		rules = append(rules, customRule(s.CustomDirect, map[string]any{"outbound": "direct"}))
 	}
 	var ruleSets []any
+	var httpClients []any
 	needCN := s.RouteMode != "global"
 	if needCN {
 		rules = append(rules,
 			map[string]any{"rule_set": []string{"geosite-cn"}, "outbound": "direct"},
 			map[string]any{"rule_set": []string{"geoip-cn"}, "outbound": "direct"},
 		)
-		ruleSets = append(ruleSets,
-			map[string]any{
-				"type": "remote", "tag": "geosite-cn", "format": "binary",
-				"url": geositeCNURL, "download_detour": detour, "update_interval": "1d",
-			},
-			map[string]any{
-				"type": "remote", "tag": "geoip-cn", "format": "binary",
-				"url": geoipCNURL, "download_detour": detour, "update_interval": "1d",
-			},
-		)
+		geosite := map[string]any{
+			"type": "remote", "tag": "geosite-cn", "format": "binary",
+			"url": geositeCNURL, "http_client": httpClientTag, "update_interval": "1d",
+		}
+		geoip := map[string]any{
+			"type": "remote", "tag": "geoip-cn", "format": "binary",
+			"url": geoipCNURL, "http_client": httpClientTag, "update_interval": "1d",
+		}
+		ruleSets = append(ruleSets, geosite, geoip)
+
+		// 1.14 用顶层 http_clients + rule_set.http_client 取代了 download_detour，
+		// 且必须显式声明：不写 http_client 时下载会走 route.final（也就是 PROXY），
+		// 而不是直连——1.14 已把这个隐式行为标为弃用。
+		// detour 只在走代理时写：显式 detour 到裸 direct 出站会被内核拒绝
+		// （"detour to an empty direct outbound makes no sense"），省掉即为直连。
+		client := map[string]any{"tag": httpClientTag}
+		if detour == "PROXY" {
+			client["detour"] = detour
+		}
+		httpClients = append(httpClients, client)
 	}
 
 	defaultMode := "Rule"
@@ -270,10 +286,9 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 	cfg := config{
 		Log: &logCfg{Level: logLevel, Timestamp: true},
 		DNS: &dnsCfg{
-			Servers:          dnsServers,
-			Rules:            dnsRules,
-			Final:            "dns-proxy",
-			IndependentCache: true,
+			Servers: dnsServers,
+			Rules:   dnsRules,
+			Final:   "dns-proxy",
 		},
 		Inbounds:  inbounds,
 		Outbounds: outbounds,
@@ -284,12 +299,13 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 			AutoDetectInterface:   true,
 			DefaultDomainResolver: map[string]any{"server": "dns-cn"},
 		},
+		HTTPClients: httpClients,
 		Experimental: &expCfg{
 			CacheFile: map[string]any{
 				"enabled":      true,
 				"path":         dirs.CacheDB(),
 				"store_fakeip": true,
-				"store_rdrc":   true,
+				"store_dns":    true,
 			},
 			ClashAPI: clashAPI,
 		},

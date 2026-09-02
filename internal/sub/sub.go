@@ -35,7 +35,7 @@ type Result struct {
 
 // userAgents tried in order: panels sniff the UA to pick a response format.
 var userAgents = []string{
-	"sing-box/1.13.0 (ssb; SFA compatible)",
+	"sing-box/1.14.0 (ssb; SFA compatible)",
 	"clash.meta/1.19.0 mihomo (ssb)",
 	"v2rayN/7.0 (ssb)",
 }

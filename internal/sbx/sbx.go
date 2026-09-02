@@ -54,17 +54,45 @@ func Version(bin string) (string, error) {
 }
 
 // Check validates a config file; on failure the returned error carries
-// sing-box's own message.
-func Check(bin, cfgPath string) error {
+// sing-box's own message. 校验通过时返回内核打印的 WARN 行（弃用告警走这里，
+// 退出码仍是 0——不回传的话新版弃用会一直悄悄躺在配置里）。
+func Check(bin, cfgPath string) (warnings string, err error) {
 	out, err := exec.Command(bin, "check", "-c", cfgPath).CombinedOutput()
+	msg := strings.TrimSpace(string(out))
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
 		if msg == "" {
 			msg = err.Error()
 		}
-		return fmt.Errorf("sing-box check 未通过:\n%s", msg)
+		return "", fmt.Errorf("sing-box check 未通过:\n%s", msg)
 	}
-	return nil
+	return warnLines(msg), nil
+}
+
+// warnLines keeps only the WARN lines, stripped of ANSI color codes.
+func warnLines(out string) string {
+	var keep []string
+	for _, ln := range strings.Split(out, "\n") {
+		ln = strings.TrimSpace(stripANSI(ln))
+		if strings.HasPrefix(ln, "WARN") {
+			keep = append(keep, ln)
+		}
+	}
+	return strings.Join(keep, "\n")
+}
+
+// stripANSI removes the color escapes sing-box writes when stderr is a pipe.
+func stripANSI(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0x1b {
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // Download fetches the latest stable sing-box release for this OS/arch into
@@ -405,10 +433,12 @@ func Doctor(d profile.Dirs, st *profile.State) []CheckResult {
 	}
 
 	if _, err := os.Stat(d.ConfigFile()); err == nil && bin != "" {
-		if err := Check(bin, d.ConfigFile()); err == nil {
-			add("config.json", true, "check 通过")
-		} else {
+		if warn, err := Check(bin, d.ConfigFile()); err != nil {
 			add("config.json", false, err.Error())
+		} else if warn != "" {
+			add("config.json", false, "check 通过，但内核有告警（多为新版弃用项，建议 ./ssb gen 重新生成）：\n"+warn)
+		} else {
+			add("config.json", true, "check 通过")
 		}
 	} else {
 		add("config.json", false, "尚未生成（添加节点/订阅后自动生成，或运行 ./ssb gen）")

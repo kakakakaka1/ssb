@@ -34,7 +34,7 @@ echo "==> go build"
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ssb ./cmd/ssb
 ./ssb version
 
-# ---- 4. e2e（不需要 root；用系统 sing-box 1.13.x 做 check 裁判）----
+# ---- 4. e2e（不需要 root；用系统 sing-box 1.14.x 做 check 裁判）----
 E2E=/tmp/ssb-e2e
 echo "==> e2e at $E2E"
 rm -rf "$E2E" && mkdir -p "$E2E"
@@ -44,7 +44,7 @@ export SSB_DIR="$E2E"
 ./ssb add "vless://5e3da52a-2d69-4e5e-b7ef-1e0e7a2e8b9c@203.0.113.10:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.apple.com&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=6ba85179&type=tcp#e2e-vless" \
         "anytls://testpass@203.0.113.11:8443/?sni=example.org&insecure=1#e2e-anytls" \
         "hy2://pw@203.0.113.12:36712/?sni=hy.example.com&insecure=1#e2e-hy2"
-test -f "$E2E/config.json"
+test -f "$E2E/data/config.json"
 echo "  config.json 生成且 check 通过 ✓"
 
 # 4.2 关 TUN（无 root e2e），换端口避免与本机可能存在的服务冲突
@@ -72,6 +72,21 @@ print("  mixed 端口 ✓")
 EOF
 ./ssb status
 ./ssb doctor || true   # doctor 在无 root 下对 TUN 权限报警属预期，此处已关 TUN
+
+# 4.4 弃用告警闸门：check 退出码为 0 也可能有 WARN，且规则集下载那类弃用
+#     只在真正 run 起来后才打印——所以必须查运行日志，不能只信 check。
+#     日志文件必须存在，否则「没告警」和「日志根本没写出来」分不清（默认
+#     log_level=warn，没有告警时这个文件是空的，属正常）。
+LOG="$E2E/logs/sing-box.log"
+test -f "$LOG" || { echo "  ✗ 找不到运行日志 $LOG，弃用检查无法进行"; ./ssb stop || true; exit 1; }
+if grep -q "deprecated" "$LOG"; then
+  echo "  ✗ 内核报告了弃用选项，配置需要跟进新版语法："
+  grep "deprecated" "$LOG" | sed 's/\x1b\[[0-9;]*m//g' | sort -u
+  ./ssb stop || true
+  exit 1
+fi
+echo "  无弃用告警 ✓"
+
 ./ssb stop
 echo "==> e2e 全部通过"
 
