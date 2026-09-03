@@ -29,7 +29,7 @@ gofmt -l .   # 提交前保持干净
 - internal/render — config.json 生成（锁 1.14 语法：新版 DNS type 字段、rule actions、rule-set remote + http_clients）
 - internal/sbx — 内核定位/下载/check/进程管理（setsid+pidfile）/doctor
 - internal/app — CLI/TUI 共用的业务层；Generate() 带 check+回滚
-- cmd/ssb — 手写子命令分发（无 cobra）；internal/tui — 四页签
+- cmd/ssb — 手写子命令分发（无 cobra）；internal/tui — 四页签（tui.go 模型/按键、view.go 渲染、settings.go 设置表）；改动配置的操作统一走 changeAndRegen，服务运行时置 dirty、按 r 重启
 
 ## 约定
 

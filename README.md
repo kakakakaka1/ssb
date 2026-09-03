@@ -26,7 +26,9 @@ sudo ./ssb start              # TUN 需要 root；或先 sudo setcap cap_net_adm
 ./ssb dashboard               # 打印 Dashboard 地址（浏览器打开管理）
 ```
 
-无参数运行 `./ssb` 进入 TUI（服务/订阅/节点/设置 四页签）。
+无参数运行 `./ssb` 进入 TUI（状态/订阅/节点/设置 四页签）。任何页面都能按
+`s` 启停、`r` 重启、`?` 看全部按键；改过设置或增删节点后会自动重新生成配置，
+服务在运行时顶栏会提示「按 r 重启生效」。
 
 **推荐 `sudo ./ssb` 然后开启tun，体验最佳。**
 
@@ -47,15 +49,15 @@ TUN 要接管宿主流量，容器必须 `network_mode: host` + `cap_add: NET_AD
 
 ## 截图
 
-服务页——进程状态、当前出口与实时日志：
+状态页——进程状态、当前出口与实时日志（j/k 翻看）：
 
-![服务页](docs/tui-service.png)
+![状态页](docs/tui-service.png)
 
-节点页——回车直接切换出口（● 为当前出口，手=手动添加、订=来自订阅）：
+节点页——回车直接切换出口，首行 auto 为自动测速（● 为当前出口，手=手动添加、订=来自订阅）：
 
 ![节点页](docs/tui-nodes.png)
 
-设置页——路由模式 / TUN / DNS / Dashboard 等，回车或空格修改：
+设置页——按功能分组；开关/枚举回车轮转（退格反向），文本项回车编辑，底栏显示每项说明：
 
 ![设置页](docs/tui-settings.png)
 
@@ -71,7 +73,7 @@ TUN 要接管宿主流量，容器必须 `network_mode: host` + `cap_add: NET_AD
 重启不丢），clash_api 仅监听 127.0.0.1 供本机控制。
 
 需要网页面板（测速、看连接、更细的策略组操作）时，在设置页打开
-「Dashboard 网页面板」并 r 重启——sing-box 首次启动会按
+「Dashboard 网页面板」，按 r 重启——sing-box 首次启动会按
 `external_ui_download_url` 自动把面板下载到 `data/ui/`（默认 metacubexd，
 可换 zashboard / yacd；国内可配 GitHub 镜像前缀加速）。访问 `./ssb dashboard`
 打印的地址；要在局域网其他设备访问，把 clash_api 监听改成
@@ -80,13 +82,13 @@ TUN 要接管宿主流量，容器必须 `network_mode: host` + `cap_add: NET_AD
 ## 自定义分流（高级）
 
 默认规则：**国内域名/IP（geosite-cn / geoip-cn）直连，其余走代理**。需要例外时，
-在设置页最底部打开「高级：自定义分流」，会多出两行：
+在设置页「高级」组打开「自定义分流」，会多出两行：
 
 - **强制代理域名**：例如 `openai.com`（自动含子域名）——即使命中国内规则也走代理
 - **强制直连域名**：例如 `steamcdn.example.com` 或 `.edu.cn`（点开头=仅按后缀匹配）
 
 逗号分隔多个域名，优先级高于内置规则，DNS 解析也会同步分流（直连域名用国内
-DNS 拿真实 IP）。改完 g 生成、r 重启生效。
+DNS 拿真实 IP）。改完自动生成配置，按 r 重启生效。
 
 ## 日志
 
@@ -104,8 +106,9 @@ TUN + auto_route 需要 `CAP_NET_ADMIN`，三选一：
 
 ## IPv6
 
-设置页的「IPv6」默认 `auto`：生成配置时探测内核（`/proc/net/if_inet6`），
-内核关掉了 IPv6 就自动生成纯 IPv4 配置（TUN 不配 v6 地址、不开 `strict_route`、
+设置页的「IPv6」默认 `auto`：生成配置时探测内核——先看 `/proc/net/if_inet6`，
+再通过 netlink 试一次 AF_INET6 策略路由（RTM_GETRULE）。内核没有 IPv6，或者
+有 IPv6 地址但不支持 IPv6 策略路由，都自动生成纯 IPv4 配置（TUN 不配 v6 地址、不开 `strict_route`、
 FakeIP 不分配 v6、AAAA 查询直接返回空）。
 
 如果启动报
@@ -116,8 +119,9 @@ FATAL start service: post-start inbound/tun[tun-in]: starting TUN interface:
 ```
 
 说明内核下不了 IPv6 策略路由（启动参数 `ipv6.disable=1`，或内核缺
-`CONFIG_IPV6` / `CONFIG_IPV6_MULTIPLE_TABLES`；后者 auto 探测不到）。把「IPv6」
-改成 `off`，g 生成、r 重启即可；`./ssb doctor` 会指出属于哪一种。
+`CONFIG_IPV6` / `CONFIG_IPV6_MULTIPLE_TABLES`——网卡上有 IPv6 地址也可能缺后者）。
+设置为 `auto` 时重新 `./ssb gen` 即可自动降级；设置为 `on` 请改成 `off` 或 `auto`；
+`./ssb doctor` 会指出属于哪一种。
 
 ## systemd-resolved 提示
 
@@ -131,7 +135,7 @@ TUN + `hijack-dns` 通常可以正常工作（resolved 的上游查询会进 TUN
 ```
 ~/ssb/
   ssb                   本工具
-  data/sing-box         内核（./ssb install 或 TUI 服务页 i 下载；也可自行复制；PATH 里有也能用）
+  data/sing-box         内核（./ssb install 或 TUI 状态页 i 下载；也可自行复制；PATH 里有也能用）
   data/config.json      生成的 sing-box 配置（.bak 为上一版）
   data/state.json       订阅/节点/设置（含 clash_api secret）
   data/ui/              Dashboard 静态文件

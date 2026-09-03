@@ -250,8 +250,8 @@ func Start(bin string, d profile.Dirs) error {
 func startHint(logTail string) string {
 	switch {
 	case strings.Contains(logTail, "address family not supported by protocol"):
-		return "\n提示：内核不支持 IPv6 策略路由（启动参数 ipv6.disable=1，或内核缺 CONFIG_IPV6 / CONFIG_IPV6_MULTIPLE_TABLES）。\n" +
-			"     在 TUI 设置页把「IPv6」改成 off，再 ./ssb gen 重新生成配置即可（也可以恢复内核 IPv6）。"
+		return "\n提示：内核不支持 IPv6 策略路由（启动参数 ipv6.disable=1，或内核缺 CONFIG_IPV6 / CONFIG_IPV6_MULTIPLE_TABLES；网卡上有 IPv6 地址也可能缺后者）。\n" +
+			"     设置为 auto 时请重新 ./ssb gen（新版会通过 netlink 探测并自动降级为纯 IPv4）；设置为 on 请改成 off 或 auto 再 ./ssb gen。"
 	case strings.Contains(logTail, "operation not permitted"), strings.Contains(logTail, "permission denied"):
 		return "\n提示：TUN 需要 root 或 CAP_NET_ADMIN，用 sudo ./ssb start，或按 ./ssb doctor 的提示 setcap。"
 	case strings.Contains(logTail, "address already in use"):
@@ -455,33 +455,26 @@ func ipv6Check(mode string) (name string, ok bool, detail string) {
 	if mode == "" {
 		mode = "auto"
 	}
-	kernel := render.HostHasIPv6()
+	_, stackErr := os.Stat("/proc/net/if_inet6")
+	hasStack := stackErr == nil
+	rules := render.IPv6RuleSupported()
+	var why string
+	switch {
+	case !hasStack:
+		why = "内核没有 IPv6（无 /proc/net/if_inet6，ipv6.disable=1 或缺 CONFIG_IPV6）"
+	case rules == 0:
+		why = "内核有 IPv6 地址但不支持 IPv6 策略路由（缺 CONFIG_IPV6_MULTIPLE_TABLES）"
+	}
 	switch {
 	case mode == "off":
-		return name, true, "设置为 off：TUN 只配 IPv4、不开 strict_route（无 IPv6 内核的正确选择）"
-	case !kernel && mode == "on":
-		return name, false, "内核没有 IPv6（无 /proc/net/if_inet6），但设置里 IPv6=on —— TUN 会启动失败，请改回 auto 或 off"
-	case !kernel:
-		return name, true, "内核没有 IPv6，auto 已自动降级为纯 IPv4"
-	case ipv6RuleSupported() == 0:
-		return name, false, "内核有 IPv6 但不支持 IPv6 策略路由（缺 CONFIG_IPV6_MULTIPLE_TABLES），auto 探测不到 —— 请把设置里的 IPv6 改成 off，再 ./ssb gen"
+		return name, true, "设置为 off：TUN 只配 IPv4、不开 strict_route"
+	case why != "" && mode == "on":
+		return name, false, why + "，但设置里 IPv6=on —— TUN 会启动失败，请改回 auto 或 off"
+	case why != "":
+		return name, true, why + "，auto 已自动降级为纯 IPv4"
+	case rules < 0:
+		return name, true, "netlink 探测失败，按支持 IPv6 处理（当前设置 " + mode + "）；启动报 address family not supported 就改成 off"
 	default:
-		return name, true, "内核支持 IPv6（当前设置 " + mode + "）"
+		return name, true, "内核支持 IPv6 策略路由（当前设置 " + mode + "）"
 	}
-}
-
-// ipv6RuleSupported probes `ip -6 rule`: 1 支持 / 0 不支持 / -1 判断不了（没装 iproute2）。
-func ipv6RuleSupported() int {
-	ip, err := exec.LookPath("ip")
-	if err != nil {
-		return -1
-	}
-	out, err := exec.Command(ip, "-6", "rule", "show").CombinedOutput()
-	if err == nil {
-		return 1
-	}
-	if strings.Contains(strings.ToLower(string(out)), "not supported") {
-		return 0
-	}
-	return -1
 }
