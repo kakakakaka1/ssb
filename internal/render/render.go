@@ -206,6 +206,13 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 			"strict_route": v6,
 			"stack":        "mixed",
 		}
+		if !v6 {
+			// 没有 IPv6 时必须显式限定 route_address 为纯 IPv4：auto_route
+			// 默认会同时为 IPv4 和 IPv6 创建策略路由规则（fib rules），
+			// 在内核没有 IPv6 或缺少 CONFIG_IPV6_MULTIPLE_TABLES 时
+			// 添加 AF_INET6 规则会返回 EAFNOSUPPORT 导致启动失败。
+			tun["route_address"] = []string{"0.0.0.0/0"}
+		}
 		if s.AutoRedirect {
 			tun["auto_redirect"] = true
 		}

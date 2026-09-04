@@ -561,6 +561,7 @@ func (m model) keysSettings(key string) (tea.Model, tea.Cmd) {
 		if len(row.opts) > 0 { // 枚举：轮转到下一个
 			return m.applySetting(&row, nextOpt(row.opts, row.get(m.a), +1))
 		}
+		m.editRow = &rows[cur]
 		return m.prompt(inputEditSetting, row.label, row.get(m.a))
 	case "backspace":
 		if len(row.opts) > 0 {

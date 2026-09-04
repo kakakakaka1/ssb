@@ -325,6 +325,10 @@ func TestIPv6Off(t *testing.T) {
 	if tun["strict_route"] != false {
 		t.Fatalf("关闭 IPv6 后必须关掉 strict_route: %v", tun["strict_route"])
 	}
+	ra := tun["route_address"].([]any)
+	if len(ra) != 1 || ra[0] != "0.0.0.0/0" {
+		t.Fatalf("关闭 IPv6 后 route_address 应为纯 IPv4: %v", ra)
+	}
 
 	dns := m["dns"].(map[string]any)
 	for _, s := range dns["servers"].([]any) {
@@ -362,6 +366,9 @@ func TestIPv6On(t *testing.T) {
 	if len(tun["address"].([]any)) != 2 || tun["strict_route"] != true {
 		t.Fatalf("ipv6=on 应保留 v6 地址与 strict_route: %v", tun)
 	}
+	if _, has := tun["route_address"]; has {
+		t.Fatal("ipv6=on 时不应设置 route_address（由 auto_route 自动处理双栈）")
+	}
 	for _, r := range m["dns"].(map[string]any)["rules"].([]any) {
 		if r.(map[string]any)["action"] == "predefined" {
 			t.Fatal("ipv6=on 不应拦截 AAAA")
@@ -380,6 +387,10 @@ func TestIPv6Auto(t *testing.T) {
 	tun := build(t, st)["inbounds"].([]any)[0].(map[string]any)
 	if len(tun["address"].([]any)) != 1 || tun["strict_route"] != false {
 		t.Fatalf("内核无 IPv6 时 auto 应降级为纯 IPv4: %v", tun)
+	}
+	ra := tun["route_address"].([]any)
+	if len(ra) != 1 || ra[0] != "0.0.0.0/0" {
+		t.Fatalf("内核无 IPv6 时 route_address 应为纯 IPv4: %v", ra)
 	}
 
 	HostHasIPv6 = func() bool { return true }
