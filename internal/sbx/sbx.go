@@ -457,13 +457,18 @@ func ipv6Check(mode string) (name string, ok bool, detail string) {
 	}
 	_, stackErr := os.Stat("/proc/net/if_inet6")
 	hasStack := stackErr == nil
+	if b, err := os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6"); err == nil && strings.TrimSpace(string(b)) == "1" {
+		hasStack = false
+	}
 	rules := render.IPv6RuleSupported()
 	var why string
 	switch {
 	case !hasStack:
-		why = "内核没有 IPv6（无 /proc/net/if_inet6，ipv6.disable=1 或缺 CONFIG_IPV6）"
+		why = "内核没有 IPv6（无 /proc/net/if_inet6 或 disable_ipv6=1）"
 	case rules == 0:
 		why = "内核有 IPv6 地址但不支持 IPv6 策略路由（缺 CONFIG_IPV6_MULTIPLE_TABLES）"
+	case rules < 0:
+		why = "netlink 探测失败，无法确认 IPv6 策略路由支持情况"
 	}
 	switch {
 	case mode == "off":
@@ -472,8 +477,6 @@ func ipv6Check(mode string) (name string, ok bool, detail string) {
 		return name, false, why + "，但设置里 IPv6=on —— TUN 会启动失败，请改回 auto 或 off"
 	case why != "":
 		return name, true, why + "，auto 已自动降级为纯 IPv4"
-	case rules < 0:
-		return name, true, "netlink 探测失败，按支持 IPv6 处理（当前设置 " + mode + "）；启动报 address family not supported 就改成 off"
 	default:
 		return name, true, "内核支持 IPv6 策略路由（当前设置 " + mode + "）"
 	}

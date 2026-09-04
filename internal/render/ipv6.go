@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"os"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -16,8 +17,8 @@ import (
 //		FATAL start service: post-start inbound/tun[tun-in]: starting TUN interface:
 //		set rules: add rule 2/16: address family not supported by protocol
 //
-//	 1. 内核层面关掉 IPv6（启动参数 ipv6.disable=1，或没编译 CONFIG_IPV6）：
-//	    /proc/net/if_inet6 不存在。
+//	 1. 内核层面关掉 IPv6（启动参数 ipv6.disable=1，或没编译 CONFIG_IPV6，或 disable_ipv6=1）：
+//	    /proc/net/if_inet6 不存在或 disable_ipv6 生效。
 //	 2. 有 IPv6（网卡上甚至有公网 v6 地址），但内核没编 CONFIG_IPV6_MULTIPLE_TABLES
 //	    （不少嵌入式/发行版精简内核如此）：AF_INET6 的 fib rule 操作全部 EAFNOSUPPORT。
 //
@@ -30,7 +31,12 @@ var HostHasIPv6 = func() bool {
 	if _, err := os.Stat("/proc/net/if_inet6"); err != nil {
 		return false
 	}
-	return IPv6RuleSupported() != 0
+	if b, err := os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6"); err == nil {
+		if strings.TrimSpace(string(b)) == "1" {
+			return false
+		}
+	}
+	return IPv6RuleSupported() == 1
 }
 
 // IPv6RuleSupported probes AF_INET6 fib rules via netlink:
@@ -41,6 +47,10 @@ func IPv6RuleSupported() int {
 		return -1
 	}
 	defer syscall.Close(fd)
+
+	tv := syscall.NsecToTimeval(1000 * 1000 * 1000) // 1s 超时，防止探测挂住
+	_ = syscall.SetsockoptTimeval(fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv)
+
 	if err := syscall.Bind(fd, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}); err != nil {
 		return -1
 	}
@@ -69,25 +79,45 @@ func IPv6RuleSupported() int {
 		if err != nil {
 			return -1
 		}
-		for _, m := range msgs {
-			switch m.Header.Type {
-			case syscall.NLMSG_DONE:
-				return 1
-			case syscall.NLMSG_ERROR:
-				if len(m.Data) < 4 {
-					return -1
-				}
-				code := -int32(binary.LittleEndian.Uint32(m.Data[:4]))
-				if code == 0 {
-					return 1
-				}
-				if syscall.Errno(code) == syscall.EAFNOSUPPORT {
-					return 0
-				}
-				return -1
-			}
+		if status, done := parseRuleProbeMsgs(msgs); done {
+			return status
 		}
 	}
+}
+
+func parseRuleProbeMsgs(msgs []syscall.NetlinkMessage) (status int, done bool) {
+	for _, m := range msgs {
+		switch m.Header.Type {
+		case syscall.NLMSG_DONE:
+			// Linux 内核在 dump 失败时（如 lookup_rules_ops 为 NULL 返回 -EAFNOSUPPORT）
+			// 不会发 NLMSG_ERROR，而是发 NLMSG_DONE，并在负载里携带 int32 类型的负数 errno。
+			// 成功时 errno 为 0（或无负载）。
+			if len(m.Data) >= 4 {
+				code := -int32(binary.LittleEndian.Uint32(m.Data[:4]))
+				if code == 0 {
+					return 1, true
+				}
+				if syscall.Errno(code) == syscall.EAFNOSUPPORT {
+					return 0, true
+				}
+				return -1, true
+			}
+			return 1, true
+		case syscall.NLMSG_ERROR:
+			if len(m.Data) < 4 {
+				return -1, true
+			}
+			code := -int32(binary.LittleEndian.Uint32(m.Data[:4]))
+			if code == 0 {
+				return 1, true
+			}
+			if syscall.Errno(code) == syscall.EAFNOSUPPORT {
+				return 0, true
+			}
+			return -1, true
+		}
+	}
+	return 0, false
 }
 
 // useIPv6 resolves the ipv6 setting（auto | on | off）为最终开关。
