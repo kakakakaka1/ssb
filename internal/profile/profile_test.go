@@ -12,7 +12,7 @@ func TestLoadSaveRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Settings.MixedPort != 2080 || !st.Settings.TunEnabled || st.Settings.TunAddress != "10.255.0.1/30" || st.Settings.ClashSecret == "" {
+	if st.Settings.MixedPort != 2080 || !st.Settings.TunEnabled || st.Settings.TunAddress != "10.255.0.1/30" || st.Settings.APISecret == "" {
 		t.Fatalf("默认设置错误: %+v", st.Settings)
 	}
 	n, err := link.Parse("trojan://pw@1.1.1.1:443?sni=a.com#节点一")
@@ -20,7 +20,7 @@ func TestLoadSaveRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Manual = append(st.Manual, n)
-	secret := st.Settings.ClashSecret
+	secret := st.Settings.APISecret
 	if err := st.Save(d); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestLoadSaveRoundtrip(t *testing.T) {
 	if len(st2.Manual) != 1 || st2.Manual[0].Tag != "节点一" {
 		t.Fatalf("节点没有存续: %+v", st2.Manual)
 	}
-	if st2.Settings.ClashSecret != secret {
+	if st2.Settings.APISecret != secret {
 		t.Fatal("secret 应保持稳定")
 	}
 	if st2.Manual[0].Outbound["type"] != "trojan" {

@@ -4,13 +4,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"ssb/internal/link"
@@ -213,7 +212,7 @@ func (a *App) EnsureBinary(ctx context.Context) (string, error) {
 // 即使 PATH 里已有 sing-box 也会下载一份到 data/。
 func (a *App) Install(ctx context.Context) (string, error) {
 	if _, err := os.Stat(a.Dirs.SingboxBin()); err == nil {
-		return fmt.Sprintf("data/sing-box 已存在（如需更新请删除后重新下载）: %s", a.Dirs.SingboxBin()), nil
+		return fmt.Sprintf("%s 已存在（如需更新请删除后重新下载）", a.Dirs.SingboxBin()), nil
 	}
 	ver, err := sbx.Download(ctx, a.Dirs, a.State.Settings.MirrorPrefix)
 	if err != nil {
@@ -240,19 +239,12 @@ func (a *App) Start(ctx context.Context) error {
 }
 
 // precheckTunPerms fails fast with actionable advice instead of a cryptic
-// permission error in the log.
+// permission error in the log（root/CAP_NET_ADMIN 或 Windows 管理员，见 sbx 平台文件）.
 func (a *App) precheckTunPerms(bin string) error {
-	if !a.State.Settings.TunEnabled || os.Geteuid() == 0 {
+	if !a.State.Settings.TunEnabled || sbx.HasTunPrivilege(bin) {
 		return nil
 	}
-	if out, err := exec.Command("getcap", bin).Output(); err == nil &&
-		strings.Contains(string(out), "cap_net_admin") {
-		return nil
-	}
-	return fmt.Errorf("已启用 TUN 但当前不是 root。二选一：\n"+
-		"  sudo ./ssb start\n"+
-		"  sudo setcap cap_net_admin+ep %s   # 一次性授权，只改本目录内文件\n"+
-		"（或在设置中关闭 TUN，仅用本地 mixed 端口）", bin)
+	return errors.New(sbx.TunPrivilegeHint(bin))
 }
 
 func (a *App) Stop() error { return sbx.Stop(a.Dirs) }
@@ -265,32 +257,40 @@ func (a *App) Restart(ctx context.Context) error {
 	return a.Start(ctx)
 }
 
-// SelectNode switches the PROXY selector at runtime via clash_api.
+// SelectNode switches the PROXY selector at runtime via the sing-box API service.
 // tag 可以是节点名或 "auto"（自动测速）。选择会由 cache_file 持久化。
 func (a *App) SelectNode(tag string) error {
 	if _, ok := sbx.Running(a.Dirs); !ok {
 		return fmt.Errorf("sing-box 未运行（服务页 s 启动后再切换）")
 	}
+	bin, err := sbx.Locate(a.Dirs, &a.State.Settings)
+	if err != nil {
+		return err
+	}
 	s := a.State.Settings
-	if err := sbx.SelectProxy(s.ClashListen, s.ClashSecret, tag); err != nil {
+	if err := sbx.SelectProxy(bin, s.APIListen, s.APISecret, tag); err != nil {
 		return fmt.Errorf("切换失败: %w（若刚增删过节点，先 g 生成、r 重启）", err)
 	}
 	return nil
 }
 
 // SelectedNode returns the PROXY selector's current choice, "" when
-// sing-box isn't running or clash_api is unreachable.
+// sing-box isn't running or the API service is unreachable.
 func (a *App) SelectedNode() string {
+	bin, err := sbx.Locate(a.Dirs, &a.State.Settings)
+	if err != nil {
+		return ""
+	}
 	s := a.State.Settings
-	now, err := sbx.SelectedProxy(s.ClashListen, s.ClashSecret)
+	now, err := sbx.SelectedProxy(bin, s.APIListen, s.APISecret)
 	if err != nil {
 		return ""
 	}
 	return now
 }
 
-// RunCore generates the config then replaces this process with sing-box in
-// the foreground（Docker/调试用：信号直达内核进程）。
+// RunCore generates the config then runs sing-box in the foreground（Docker/调试用：
+// Linux 直接 exec，信号直达内核进程；Windows 以共享控制台的子进程等它退出）。
 func (a *App) RunCore(ctx context.Context) error {
 	bin, err := a.EnsureBinary(ctx)
 	if err != nil {
@@ -304,7 +304,7 @@ func (a *App) RunCore(ctx context.Context) error {
 	if err := a.precheckTunPerms(bin); err != nil {
 		return err
 	}
-	return syscall.Exec(bin, []string{bin, "run", "-c", a.Dirs.ConfigFile()}, os.Environ())
+	return sbx.RunForeground(bin, "run", "-c", a.Dirs.ConfigFile())
 }
 
 // StatusText renders a short human status block.
@@ -322,8 +322,8 @@ func (a *App) StatusText() string {
 	} else {
 		b.WriteString("二进制: 未找到\n")
 	}
-	alive := sbx.APIAlive(a.State.Settings.ClashListen, a.State.Settings.ClashSecret)
-	fmt.Fprintf(&b, "clash_api: %s\n", map[bool]string{true: "可达", false: "不可达"}[alive])
+	alive := sbx.APIAlive(a.State.Settings.APIListen)
+	fmt.Fprintf(&b, "API 服务: %s\n", map[bool]string{true: "可达", false: "不可达"}[alive])
 	if alive {
 		if now := a.SelectedNode(); now != "" {
 			fmt.Fprintf(&b, "当前出口: %s\n", now)
@@ -331,6 +331,7 @@ func (a *App) StatusText() string {
 	}
 	fmt.Fprintf(&b, "节点数: %d（手动 %d + 订阅 %d 个源）\n",
 		len(a.State.AllNodes()), len(a.State.Manual), len(a.State.Subscriptions))
+	fmt.Fprintf(&b, "规则集: %s\n", render.RuleSetSourceText(a.State.Settings))
 	if a.State.Settings.DashboardOff {
 		b.WriteString("Dashboard: 已关闭（节点页可直接切换节点）\n")
 	} else {
@@ -339,17 +340,17 @@ func (a *App) StatusText() string {
 	return b.String()
 }
 
-// DashboardURL builds the external_ui URL served by sing-box's clash_api.
+// DashboardURL is where the API service serves the official sing-box Dashboard.
 func (a *App) DashboardURL() string {
-	listen := a.State.Settings.ClashListen
+	listen := a.State.Settings.APIListen
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
-		return "http://" + listen + "/ui/"
+		return "http://" + listen + "/dashboard/"
 	}
 	if host == "0.0.0.0" || host == "::" || host == "" {
 		host = lanIP()
 	}
-	return fmt.Sprintf("http://%s/ui/?secret=%s", net.JoinHostPort(host, port), a.State.Settings.ClashSecret)
+	return fmt.Sprintf("http://%s/dashboard/", net.JoinHostPort(host, port))
 }
 
 func lanIP() string {

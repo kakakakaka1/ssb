@@ -1,5 +1,5 @@
-// ssb — 无桌面 Linux 上的 sing-box 客户端管理器：
-// 解析节点/订阅链接 → 生成 TUN+FakeIP+clash_api 的 config.json → 托管 sing-box 进程。
+// ssb — Linux / Windows 终端里的 sing-box 客户端管理器：
+// 解析节点/订阅链接 → 生成 TUN+FakeIP+官方 API 服务的 config.json → 托管 sing-box 进程。
 // 无参数进入 TUI；子命令供脚本/cron 使用。
 package main
 
@@ -35,8 +35,8 @@ const usage = `ssb %s — sing-box 节点/订阅管理器（TUN + FakeIP + 官�
   nodes rm <tag>        删除手动节点
   gen                   重新生成 config.json（自动 sing-box check）
   install               下载 sing-box 到 data/（不装入系统；也可自行复制到 data/sing-box）
-  start|stop|restart    启停 sing-box（TUN 需要 root 或 setcap，见 doctor）
-  run-core              前台运行：生成配置后 exec sing-box（Docker/调试用）
+  start|stop|restart    启停 sing-box（TUN 需要 root / 管理员权限，见 doctor）
+  run-core              前台运行：生成配置后在前台跑 sing-box（Docker/调试用）
   status                运行状态
   logs [-f]             查看日志（-f 跟随）
   dashboard             打印 Dashboard 地址与 secret
@@ -233,7 +233,8 @@ func main() {
 			break
 		}
 		fmt.Println("地址  :", a.DashboardURL())
-		fmt.Println("secret:", a.State.Settings.ClashSecret)
+		fmt.Println("secret:", a.State.Settings.APISecret)
+		fmt.Println("（官方 sing-box Dashboard 由 API 服务托管；首次打开按提示填入 secret）")
 
 	case "doctor":
 		fail := false
@@ -271,7 +272,7 @@ func regen(a *app.App) {
 	}
 	fmt.Println("config.json 已生成并通过校验:", a.Dirs.ConfigFile())
 	if _, ok := sbx.Running(a.Dirs); ok {
-		fmt.Println("提示: sing-box 正在运行，执行 ./ssb restart 使新配置生效")
+		fmt.Printf("提示: sing-box 正在运行，执行 %s restart 使新配置生效\n", sbx.Self)
 	}
 }
 

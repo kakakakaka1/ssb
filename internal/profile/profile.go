@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"ssb/internal/link"
@@ -24,13 +25,13 @@ type Settings struct {
 	AutoRedirect    bool     `json:"auto_redirect"`           // Linux nftables 加速（默认关，兼容性优先）
 	MixedEnabled    bool     `json:"mixed_enabled"`           // 本地 mixed(socks/http) 入站
 	MixedPort       int      `json:"mixed_port"`              // 默认 2080
-	ClashListen     string   `json:"clash_listen"`            // clash_api external_controller
-	ClashSecret     string   `json:"clash_secret"`            // 首次生成随机值
-	ExternalUI      string   `json:"external_ui"`             // metacubexd | zashboard | yacd
-	DashboardOff    bool     `json:"dashboard_off"`           // 关闭网页面板（clash_api 仍监听，TUI 切换节点用）
+	APIListen       string   `json:"api_listen"`              // sing-box API 服务监听 host:port（TUI 切节点 + 官方面板）
+	APISecret       string   `json:"api_secret"`              // 首次生成随机值
+	DashboardOff    bool     `json:"dashboard_off"`           // 关闭网页面板（API 服务仍监听，TUI 切换节点用）
 	MirrorPrefix    string   `json:"mirror_prefix"`           // GitHub 镜像前缀（UI/内核下载用），如 https://ghproxy.net/
 	FakeIP          bool     `json:"fakeip"`                  // FakeIP DNS
 	DownloadDetour  string   `json:"download_detour"`         // 规则集/UI 下载出站: direct | PROXY
+	RuleSetSource   string   `json:"ruleset_source"`          // 规则集来源: jsdelivr（默认，国内可直连的 CDN）| github（raw.githubusercontent.com，套镜像前缀）
 	DNSCN           string   `json:"dns_cn"`                  // 国内直连 DNS（udp）
 	DNSProxy        string   `json:"dns_proxy"`               // 代理侧 DNS（https）
 	SingboxPath     string   `json:"singbox_path"`            // 手动指定 sing-box 路径（可空）
@@ -66,12 +67,12 @@ func defaultSettings() Settings {
 		AutoRedirect:   false,
 		MixedEnabled:   true,
 		MixedPort:      2080,
-		ClashListen:    "127.0.0.1:9090",
-		ClashSecret:    randomSecret(),
-		ExternalUI:     "metacubexd",
-		DashboardOff:   true, // 默认只用 TUI/clash_api，网页面板按需开启
+		APIListen:      "127.0.0.1:9090",
+		APISecret:      randomSecret(),
+		DashboardOff:   true, // 默认只用 TUI 控制，网页面板按需开启
 		FakeIP:         true,
 		DownloadDetour: "direct",
+		RuleSetSource:  "jsdelivr",
 		DNSCN:          "223.5.5.5",
 		DNSProxy:       "8.8.8.8",
 		LogLevel:       "warn",
@@ -89,20 +90,29 @@ func randomSecret() string {
 // Dirs resolves every path ssb touches, all under one base directory.
 type Dirs struct{ Base string }
 
-func (d Dirs) StateFile() string  { return filepath.Join(d.Base, "data", "state.json") }
-func (d Dirs) ConfigFile() string { return filepath.Join(d.Base, "data", "config.json") }
-func (d Dirs) BackupFile() string { return filepath.Join(d.Base, "data", "config.json.bak") }
-func (d Dirs) SingboxBin() string { return filepath.Join(d.Base, "data", "sing-box") }
-func (d Dirs) DataDir() string    { return filepath.Join(d.Base, "data") }
-func (d Dirs) UIDir() string      { return filepath.Join(d.Base, "data", "ui") }
-func (d Dirs) CacheDB() string    { return filepath.Join(d.Base, "data", "cache.db") }
-func (d Dirs) LogDir() string     { return filepath.Join(d.Base, "logs") }
-func (d Dirs) LogFile() string    { return filepath.Join(d.Base, "logs", "sing-box.log") }
-func (d Dirs) RunDir() string     { return filepath.Join(d.Base, "run") }
-func (d Dirs) PidFile() string    { return filepath.Join(d.Base, "run", "sing-box.pid") }
+func (d Dirs) StateFile() string    { return filepath.Join(d.Base, "data", "state.json") }
+func (d Dirs) ConfigFile() string   { return filepath.Join(d.Base, "data", "config.json") }
+func (d Dirs) BackupFile() string   { return filepath.Join(d.Base, "data", "config.json.bak") }
+func (d Dirs) SingboxBin() string   { return filepath.Join(d.Base, "data", singboxBinName(runtime.GOOS)) }
+func (d Dirs) DataDir() string      { return filepath.Join(d.Base, "data") }
+func (d Dirs) DashboardDir() string { return filepath.Join(d.Base, "data", "dashboard") }
+func (d Dirs) CacheDB() string      { return filepath.Join(d.Base, "data", "cache.db") }
+func (d Dirs) LogDir() string       { return filepath.Join(d.Base, "logs") }
+func (d Dirs) LogFile() string      { return filepath.Join(d.Base, "logs", "sing-box.log") }
+func (d Dirs) RunDir() string       { return filepath.Join(d.Base, "run") }
+func (d Dirs) PidFile() string      { return filepath.Join(d.Base, "run", "sing-box.pid") }
+
+// singboxBinName: 内核文件名，Windows 上带 .exe（exec.LookPath 找 PATH 时会自动补，
+// 但 data/ 里的那份要我们自己写对）。
+func singboxBinName(goos string) string {
+	if goos == "windows" {
+		return "sing-box.exe"
+	}
+	return "sing-box"
+}
 
 func (d Dirs) Ensure() error {
-	for _, p := range []string{d.DataDir(), d.UIDir(), d.LogDir(), d.RunDir()} {
+	for _, p := range []string{d.DataDir(), d.DashboardDir(), d.LogDir(), d.RunDir()} {
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			return err
 		}
@@ -127,20 +137,20 @@ func Load(d Dirs) (*State, error) {
 	if st.Settings.MixedPort == 0 {
 		st.Settings.MixedPort = 2080
 	}
-	if st.Settings.ClashListen == "" {
-		st.Settings.ClashListen = "127.0.0.1:9090"
+	if st.Settings.APIListen == "" {
+		st.Settings.APIListen = "127.0.0.1:9090"
 	}
-	if st.Settings.ClashSecret == "" {
-		st.Settings.ClashSecret = randomSecret()
-	}
-	if st.Settings.ExternalUI == "" {
-		st.Settings.ExternalUI = "metacubexd"
+	if st.Settings.APISecret == "" {
+		st.Settings.APISecret = randomSecret()
 	}
 	if st.Settings.RouteMode == "" {
 		st.Settings.RouteMode = "rule"
 	}
 	if st.Settings.DownloadDetour == "" {
 		st.Settings.DownloadDetour = "direct"
+	}
+	if st.Settings.RuleSetSource == "" {
+		st.Settings.RuleSetSource = "jsdelivr"
 	}
 	if st.Settings.DNSCN == "" {
 		st.Settings.DNSCN = "223.5.5.5"

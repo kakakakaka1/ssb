@@ -2,6 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"net"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -61,7 +64,7 @@ func settingRows(a *app.App) []settingRow {
 	rows := []settingRow{
 		enumRow("代理", "路由模式", "rule=国内直连、其余走代理；global=全部走代理",
 			[]string{"rule", "global"}, func(a *app.App) *string { return &S(a).RouteMode }),
-		boolRow("代理", "TUN 透明代理", "接管系统全部流量，需要 root 或 CAP_NET_ADMIN；关掉则只有本地 mixed 端口",
+		boolRow("代理", "TUN 透明代理", "接管系统全部流量，需要 root / 管理员权限；关掉则只有本地 mixed 端口",
 			func(a *app.App) *bool { return &S(a).TunEnabled }),
 		textRow("代理", "TUN IP", "TUN 虚拟网卡 IPv4 CIDR（默认 10.255.0.1/30，避开 Docker 默认网段）",
 			func(a *app.App) *string { return &S(a).TunAddress }),
@@ -84,10 +87,18 @@ func settingRows(a *app.App) []settingRow {
 				S(a).MixedPort = n
 				return nil
 			}},
-		textRow("本地入站", "clash_api 监听", "host:port；改成 0.0.0.0:9090 可让局域网设备打开 Dashboard",
-			func(a *app.App) *string { return &S(a).ClashListen }),
+		{group: "本地入站", label: "API 监听", desc: "sing-box API 服务 host:port（TUI 切节点和网页面板都走它）；改成 0.0.0.0:9090 可让局域网设备打开面板",
+			get: func(a *app.App) string { return S(a).APIListen },
+			set: func(a *app.App, v string) error {
+				v = strings.TrimSpace(v)
+				if _, _, err := net.SplitHostPort(v); err != nil {
+					return fmt.Errorf("格式应为 host:port：%q", v)
+				}
+				S(a).APIListen = v
+				return nil
+			}},
 
-		{group: "面板", label: "Dashboard 网页面板", desc: "关=只用 TUI/API 控制（默认）；开=启动时下载网页面板到 data/ui/",
+		{group: "面板", label: "Dashboard 网页面板", desc: "关=只用 TUI 控制（默认）；开=API 服务自动下载官方 sing-box Dashboard 到 data/dashboard/ 并在 /dashboard/ 提供",
 			opts: []string{on, off},
 			get: func(a *app.App) string {
 				if S(a).DashboardOff {
@@ -96,17 +107,17 @@ func settingRows(a *app.App) []settingRow {
 				return on
 			},
 			set: func(a *app.App, v string) error { S(a).DashboardOff = v == off; return nil }},
-		enumRow("面板", "Dashboard 类型", "metacubexd 功能最全；yacd 最轻",
-			[]string{"metacubexd", "zashboard", "yacd"}, func(a *app.App) *string { return &S(a).ExternalUI }),
 
 		textRow("DNS", "国内 DNS", "udp 地址，直连查询用，例如 223.5.5.5",
 			func(a *app.App) *string { return &S(a).DNSCN }),
 		textRow("DNS", "代理 DNS", "DoH 地址，经代理查询用，例如 https://1.1.1.1/dns-query",
 			func(a *app.App) *string { return &S(a).DNSProxy }),
 
-		textRow("下载", "GitHub 镜像前缀", "规则集/面板/内核下载加速，例如 https://ghproxy.com/ ；留空直连",
+		enumRow("下载", "规则集源", "jsdelivr=国内可直连的 CDN（默认）；github=raw.githubusercontent.com，国内需配镜像前缀或下载出站 PROXY，首次拉取失败会起不来",
+			[]string{"jsdelivr", "github"}, func(a *app.App) *string { return &S(a).RuleSetSource }),
+		textRow("下载", "GitHub 镜像前缀", "内核/官方面板/GitHub 规则集源的下载加速，例如 https://ghproxy.net/ ；留空直连（jsdelivr 源不套用）",
 			func(a *app.App) *string { return &S(a).MirrorPrefix }),
-		enumRow("下载", "下载出站", "规则集和面板走 direct 还是 PROXY；镜像不可用时改 PROXY",
+		enumRow("下载", "下载出站", "sing-box 拉规则集/面板时走 direct 还是 PROXY；GitHub 源或镜像不通时改 PROXY（不影响 ssb 下载内核）",
 			[]string{"direct", "PROXY"}, func(a *app.App) *string { return &S(a).DownloadDetour }),
 
 		textRow("内核", "sing-box 路径", "留空自动：先找 data/sing-box，再找 PATH",
@@ -122,6 +133,9 @@ func settingRows(a *app.App) []settingRow {
 			domainRow("高级", "  强制代理域名", func(a *app.App) *[]string { return &S(a).CustomProxy }),
 			domainRow("高级", "  强制直连域名", func(a *app.App) *[]string { return &S(a).CustomDirect }),
 		)
+	}
+	if runtime.GOOS != "linux" { // auto_redirect 是 Linux nftables 专属，生成时也会被省略
+		rows = slices.DeleteFunc(rows, func(r settingRow) bool { return r.label == "auto_redirect" })
 	}
 	return rows
 }

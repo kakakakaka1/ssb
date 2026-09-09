@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"ssb/internal/render"
 	"ssb/internal/sub"
 )
 
@@ -238,7 +239,7 @@ func (m model) viewStatus() string {
 			}
 			kv("出口", styBold.Render(out)+styDim.Render("  节点页回车切换"))
 		} else {
-			kv("出口", styWarn.Render("clash_api 不可达"))
+			kv("出口", styWarn.Render("API 服务不可达"))
 		}
 	}
 	kv("节点", fmt.Sprintf("%d 个（手动 %d，订阅 %d 个源）",
@@ -251,6 +252,7 @@ func (m model) viewStatus() string {
 		mode += fmt.Sprintf(" · mixed 127.0.0.1:%d", s.MixedPort)
 	}
 	kv("模式", mode)
+	kv("规则集", render.RuleSetSourceText(s))
 	if s.DashboardOff {
 		kv("面板", styDim.Render("已关闭（设置页开启）"))
 	} else {

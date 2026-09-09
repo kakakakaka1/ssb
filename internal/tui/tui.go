@@ -41,7 +41,7 @@ type tickMsg struct {
 	pid      int
 	version  string // 内核版本，找不到内核时为空
 	apiAlive bool
-	now      string // PROXY 选择器当前出口（clash_api 不可达时为空）
+	now      string // PROXY 选择器当前出口（API 服务不可达时为空）
 	logTail  string
 }
 
@@ -115,7 +115,7 @@ func snapshot(a *app.App) tickMsg {
 		t.version, _ = sbx.Version(bin)
 	}
 	s := a.State.Settings
-	t.apiAlive = sbx.APIAlive(s.ClashListen, s.ClashSecret)
+	t.apiAlive = sbx.APIAlive(s.APIListen)
 	if t.apiAlive {
 		t.now = a.SelectedNode()
 	}

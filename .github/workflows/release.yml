@@ -1,8 +1,10 @@
 # 打 tag（v*）自动构建并发布 Release：
 #   git tag v0.1.0 && git push origin v0.1.0
-# 每架构两个产物 + checksums.txt：
-#   ssb-<版本>-linux-<arch>.tar.gz                精简包（首次运行 ./ssb install 下载内核）
-#   ssb-<版本>-linux-<arch>-with-singbox.tar.gz   完整包（附带 sing-box，解压即用）
+# 每个平台/架构两个产物 + checksums.txt：
+#   ssb-<版本>-linux-<arch>.tar.gz                  精简包（首次运行 ./ssb install 下载内核）
+#   ssb-<版本>-linux-<arch>-with-singbox.tar.gz     完整包（附带 sing-box，解压即用）
+#   ssb-<版本>-windows-<arch>.zip                   精简包（解压后 .\ssb install）
+#   ssb-<版本>-windows-<arch>-with-singbox.zip      完整包（附带 sing-box.exe + 官方包里的 dll）
 name: Release
 on:
   push:
@@ -23,12 +25,12 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test ./...
-      - name: Build binaries
+      - name: Build Linux packages
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p dist
           for arch in amd64 arm64; do
-            stage="dist/stage-${arch}"
+            stage="dist/stage-linux-${arch}"
             mkdir -p "${stage}/data"
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
               go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
@@ -43,13 +45,37 @@ jobs:
               -C "$stage" ssb data/sing-box README.md
             rm -rf "$stage"
           done
-          cd dist && sha256sum *.tar.gz > checksums.txt
+      - name: Build Windows packages
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            stage="dist/stage-windows-${arch}"
+            mkdir -p "${stage}/data"
+            CGO_ENABLED=0 GOOS=windows GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "${stage}/ssb.exe" ./cmd/ssb
+            cp README.md "${stage}/"
+            (cd "$stage" && zip -q "../ssb-${VERSION}-windows-${arch}.zip" ssb.exe README.md)
+            # 官方 zip：sing-box.exe 必带；同目录的 dll（1.14 起有 libcronet.dll）一并放进 data/，
+            # 与 `ssb install` 的行为一致。wintun 已内嵌在 exe 里，不需要单独的驱动文件。
+            sb="sing-box-${SINGBOX_VERSION}-windows-${arch}"
+            curl -fsSL -o "/tmp/${sb}.zip" "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/${sb}.zip"
+            unzip -q -j "/tmp/${sb}.zip" "${sb}/sing-box.exe" -d "${stage}/data"
+            unzip -q -j "/tmp/${sb}.zip" "${sb}/*.dll" -d "${stage}/data" || true
+            (cd "$stage" && zip -q -r "../ssb-${VERSION}-windows-${arch}-with-singbox.zip" ssb.exe data README.md)
+            rm -rf "$stage" "/tmp/${sb}.zip"
+          done
+      - name: Checksums
+        run: cd dist && sha256sum *.tar.gz *.zip > checksums.txt
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
           body: |
-            `-with-singbox` 完整包附带未修改的 [sing-box](https://github.com/SagerNet/sing-box) v${{ env.SINGBOX_VERSION }} 官方二进制（GPL-3.0，版权归 SagerNet）；精简包解压后运行 `./ssb install` 下载内核。
+            `-with-singbox` 完整包附带未修改的 [sing-box](https://github.com/SagerNet/sing-box) v${{ env.SINGBOX_VERSION }} 官方二进制（GPL-3.0，版权归 SagerNet）；精简包解压后运行 `./ssb install`（Windows：`.\ssb install`）下载内核。
+            Windows 包为 zip；TUN 需要在管理员终端里运行。
           generate_release_notes: true
           files: |
             dist/*.tar.gz
+            dist/*.zip
             dist/checksums.txt

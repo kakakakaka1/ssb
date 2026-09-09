@@ -1,10 +1,13 @@
 // Package sbx locates / downloads / drives the sing-box binary: config check,
-// start/stop as a detached child with pidfile, clash_api liveness, doctor.
+// start/stop as a detached child with pidfile, API 服务探测与节点切换, doctor.
+//
+// 进程、权限、体检里跟操作系统绑定的部分放在 sbx_linux.go / sbx_windows.go，
+// 两个文件各自提供同一组函数（清单见 sbx_linux.go 顶部）；本文件只写跨平台逻辑。
 package sbx
 
 import (
 	"archive/tar"
-	"bytes"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -14,16 +17,25 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"ssb/internal/profile"
-	"ssb/internal/render"
 )
+
+// Self 是提示文案里指代本程序的写法：Linux 用 ./ssb，Windows（PowerShell）用 .\ssb。
+var Self = selfName(runtime.GOOS)
+
+func selfName(goos string) string {
+	if goos == "windows" {
+		return `.\ssb`
+	}
+	return "./ssb"
+}
 
 // Locate returns the sing-box binary path, trying in order:
 // 显式设置 > data/sing-box > PATH。
@@ -40,7 +52,8 @@ func Locate(d profile.Dirs, s *profile.Settings) (string, error) {
 	if p, err := exec.LookPath("sing-box"); err == nil {
 		return p, nil
 	}
-	return "", fmt.Errorf("未找到 sing-box（TUI 服务页按 i 或运行 ./ssb install 自动下载；也可自行下载后复制到 data/sing-box）")
+	return "", fmt.Errorf("未找到 sing-box（TUI 服务页按 i 或运行 %s install 自动下载；也可自行下载后复制到 data/%s）",
+		Self, filepath.Base(d.SingboxBin()))
 }
 
 // Version runs `sing-box version` and returns the first line.
@@ -50,7 +63,7 @@ func Version(bin string) (string, error) {
 		return "", err
 	}
 	line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
-	return line, nil
+	return strings.TrimRight(line, "\r"), nil
 }
 
 // Check validates a config file; on failure the returned error carries
@@ -95,13 +108,15 @@ func stripANSI(s string) string {
 	return b.String()
 }
 
+// ---- download ----
+
 // Download fetches the latest stable sing-box release for this OS/arch into
-// data/sing-box. mirror（可空）会被拼在 GitHub 下载地址前面。
+// data/sing-box（Windows: data/sing-box.exe）。mirror（可空）会被拼在 GitHub 下载地址前面。
 func Download(ctx context.Context, d profile.Dirs, mirror string) (string, error) {
 	if err := d.Ensure(); err != nil {
 		return "", err
 	}
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Minute} // Windows 包 30MB 以上，别让慢网络撞超时
 
 	// GitHub API 拿最新版本号与资产列表（API 地址不套镜像）
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
@@ -125,16 +140,16 @@ func Download(ctx context.Context, d profile.Dirs, mirror string) (string, error
 	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
 		return "", err
 	}
-	want := fmt.Sprintf("linux-%s.tar.gz", runtime.GOARCH)
+	suffix := assetSuffix(runtime.GOOS, runtime.GOARCH)
 	assetURL := ""
 	for _, a := range rel.Assets {
-		if strings.Contains(a.Name, "linux-"+runtime.GOARCH) && strings.HasSuffix(a.Name, ".tar.gz") {
+		if strings.HasSuffix(a.Name, suffix) {
 			assetURL = a.BrowserDownloadURL
 			break
 		}
 	}
 	if assetURL == "" {
-		return "", fmt.Errorf("release %s 中未找到 %s 资产", rel.TagName, want)
+		return "", fmt.Errorf("release %s 中未找到 *%s 资产", rel.TagName, suffix)
 	}
 
 	req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, mirror+assetURL, nil)
@@ -147,36 +162,116 @@ func Download(ctx context.Context, d profile.Dirs, mirror string) (string, error
 		return "", fmt.Errorf("下载 %s: HTTP %d", assetURL, resp2.StatusCode)
 	}
 
-	gz, err := gzip.NewReader(resp2.Body)
+	if strings.HasSuffix(suffix, ".zip") {
+		err = extractZip(d, resp2.Body)
+	} else {
+		err = extractTarGz(d, resp2.Body)
+	}
 	if err != nil {
 		return "", err
+	}
+	return rel.TagName, nil
+}
+
+// assetSuffix 精确到官方资产名 sing-box-<ver>-<os>-<arch>.<ext> 的尾部。
+// 用 Contains 会误选 linux-amd64-glibc / -musl、windows-amd64-legacy-windows-7 这些变体。
+func assetSuffix(goos, goarch string) string {
+	ext := ".tar.gz"
+	if goos == "windows" {
+		ext = ".zip"
+	}
+	return "-" + goos + "-" + goarch + ext
+}
+
+// extractTarGz：Linux 包是 tar.gz，流式读到 sing-box 就写盘、不再往下读。
+func extractTarGz(d profile.Dirs, body io.Reader) error {
+	gz, err := gzip.NewReader(body)
+	if err != nil {
+		return err
 	}
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			return "", fmt.Errorf("压缩包里没有 sing-box 可执行文件")
+			return fmt.Errorf("压缩包里没有 sing-box 可执行文件")
 		}
 		if err != nil {
-			return "", err
+			return err
 		}
-		if filepath.Base(hdr.Name) == "sing-box" && hdr.Typeflag == tar.TypeReg {
-			tmp := d.SingboxBin() + ".tmp"
-			f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
-			if err != nil {
-				return "", err
-			}
-			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
-				return "", err
-			}
-			f.Close()
-			if err := os.Rename(tmp, d.SingboxBin()); err != nil {
-				return "", err
-			}
-			return rel.TagName, nil
+		if hdr.Typeflag == tar.TypeReg && path.Base(hdr.Name) == "sing-box" {
+			return writeAtomic(d.SingboxBin(), tr, 0o755)
 		}
 	}
+}
+
+// extractZip：Windows 包是 zip（要随机访问，先落到临时文件）。除 sing-box.exe 外把
+// 同包的 *.dll 也放进 data/——1.14 的官方包附带 libcronet.dll（按需加载，本工具不用
+// cronet，带上只是为了跟官方包一致）；wintun 已内嵌在 exe 里，不需要单独的 wintun.dll。
+func extractZip(d profile.Dirs, body io.Reader) error {
+	tmp, err := os.CreateTemp(d.DataDir(), "sing-box-*.zip")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = io.Copy(tmp, body)
+	tmp.Close()
+	if err != nil {
+		return err
+	}
+	zr, err := zip.OpenReader(tmp.Name())
+	if err != nil {
+		return err
+	}
+	defer zr.Close() // 先于上面的 Remove 执行：Windows 上文件开着删不掉
+	found := false
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		base := path.Base(f.Name)
+		var dst string
+		switch {
+		case base == "sing-box.exe":
+			dst = d.SingboxBin()
+			found = true
+		case strings.HasSuffix(strings.ToLower(base), ".dll"):
+			dst = filepath.Join(d.DataDir(), base)
+		default:
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		err = writeAtomic(dst, rc, 0o755)
+		rc.Close()
+		if err != nil {
+			return err
+		}
+	}
+	if !found {
+		return fmt.Errorf("压缩包里没有 sing-box.exe")
+	}
+	return nil
+}
+
+// writeAtomic 先写 dst.tmp 再改名，下载中断不会留下半截可执行文件。
+func writeAtomic(dst string, r io.Reader, mode os.FileMode) error {
+	tmp := dst + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, r); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dst)
 }
 
 // ---- process management ----
@@ -192,19 +287,14 @@ func Running(d profile.Dirs) (int, bool) {
 	if err != nil || pid <= 0 {
 		return 0, false
 	}
-	if err := syscall.Kill(pid, 0); err != nil {
+	if !processAlive(pid) || !processLooksLikeSingbox(pid) { // 后者防 pid 复用
 		return 0, false
-	}
-	// 防 pid 复用：确认 cmdline 里是 sing-box
-	if cl, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
-		if !bytes.Contains(cl, []byte("sing-box")) {
-			return 0, false
-		}
 	}
 	return pid, true
 }
 
-// Start launches sing-box detached (setsid), logging to logs/sing-box.log.
+// Start launches sing-box detached from this process（Linux setsid，Windows
+// 无控制台的独立进程组），logging to logs/sing-box.log.
 func Start(bin string, d profile.Dirs) error {
 	if pid, ok := Running(d); ok {
 		return fmt.Errorf("sing-box 已在运行 (pid %d)", pid)
@@ -226,7 +316,7 @@ func Start(bin string, d profile.Dirs) error {
 	cmd.Dir = d.Base
 	cmd.Stdout = logf
 	cmd.Stderr = logf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachedProcAttr()
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -238,7 +328,7 @@ func Start(bin string, d profile.Dirs) error {
 
 	// 稍等确认没有立刻退出（权限不足/端口占用等最常见）
 	time.Sleep(1200 * time.Millisecond)
-	if err := syscall.Kill(pid, 0); err != nil {
+	if !processAlive(pid) {
 		os.Remove(d.PidFile())
 		tail := tailFile(d.LogFile(), 15)
 		return fmt.Errorf("sing-box 启动即退出，日志尾部：\n%s%s", tail, startHint(tail))
@@ -247,99 +337,109 @@ func Start(bin string, d profile.Dirs) error {
 }
 
 // startHint turns 常见的内核/权限报错 into 一句可执行的中文建议，附在启动失败信息后面。
+// 平台特有的（Linux 的 IPv6 策略路由 / CAP_NET_ADMIN，Windows 的管理员权限）在 platformStartHint。
 func startHint(logTail string) string {
-	switch {
-	case strings.Contains(logTail, "address family not supported by protocol"):
-		return "\n提示：内核不支持 IPv6 策略路由（启动参数 ipv6.disable=1，或内核缺 CONFIG_IPV6 / CONFIG_IPV6_MULTIPLE_TABLES；网卡上有 IPv6 地址也可能缺后者）。\n" +
-			"     设置为 auto 时请重新 ./ssb gen（新版会通过 netlink 探测并自动降级为纯 IPv4）；设置为 on 请改成 off 或 auto 再 ./ssb gen。"
-	case strings.Contains(logTail, "operation not permitted"), strings.Contains(logTail, "permission denied"):
-		return "\n提示：TUN 需要 root 或 CAP_NET_ADMIN，用 sudo ./ssb start，或按 ./ssb doctor 的提示 setcap。"
-	case strings.Contains(logTail, "address already in use"):
-		return "\n提示：端口被占用，换 mixed / clash_api 端口或停掉占用者（./ssb doctor 会指出是谁）。"
+	if h := platformStartHint(logTail); h != "" {
+		return h
+	}
+	if strings.Contains(logTail, "address already in use") ||
+		strings.Contains(logTail, "Only one usage of each socket address") { // Windows 的措辞
+		return fmt.Sprintf("\n提示：端口被占用，换 mixed / API 端口或停掉占用者（%s doctor 会指出是谁）。", Self)
 	}
 	return ""
 }
 
-// Stop sends SIGTERM (then SIGKILL after 5s) to the recorded pid.
+// Stop asks sing-box to exit（Linux 发 SIGTERM，Windows 只能 TerminateProcess），
+// 5 秒没退干净就强杀。
 func Stop(d profile.Dirs) error {
 	pid, ok := Running(d)
 	if !ok {
 		os.Remove(d.PidFile())
 		return fmt.Errorf("sing-box 未在运行")
 	}
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+	if err := terminateProcess(pid); err != nil {
 		return err
 	}
 	for i := 0; i < 50; i++ {
 		time.Sleep(100 * time.Millisecond)
-		if err := syscall.Kill(pid, 0); err != nil {
+		if !processAlive(pid) {
 			os.Remove(d.PidFile())
 			return nil
 		}
 	}
-	syscall.Kill(pid, syscall.SIGKILL)
+	killProcess(pid)
 	os.Remove(d.PidFile())
 	return nil
 }
 
-// ---- clash_api client（状态探测 + TUI 节点切换）----
+// ---- API 服务客户端（状态探测 + TUI 节点切换）----
+//
+// sing-box 1.14 的官方 API 是 gRPC；ssb 不引入 gRPC 依赖，节点切换/查询直接复用内核
+// 自带的 `sing-box api` 命令行（--url/--secret），存活探测用一次普通 HTTP 请求。
 
-func apiDo(method, listen, secret, path string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequest(method, "http://"+listen+path, body)
-	if err != nil {
-		return nil, err
+// APIAlive reports whether the API service answers on listen. 它同时承载 gRPC-Web 和
+// 面板，任何 HTTP 响应（哪怕 404 / 重定向）都说明服务在；只有连不上才算不可达。
+func APIAlive(listen string) bool {
+	client := &http.Client{
+		Timeout:       2 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	if secret != "" {
-		req.Header.Set("Authorization", "Bearer "+secret)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	return (&http.Client{Timeout: 2 * time.Second}).Do(req)
-}
-
-// APIAlive probes the clash_api /version endpoint.
-func APIAlive(listen, secret string) bool {
-	resp, err := apiDo(http.MethodGet, listen, secret, "/version", nil)
+	resp, err := client.Get("http://" + listen + "/")
 	if err != nil {
 		return false
 	}
 	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	return true
+}
+
+// apiOutput runs `sing-box api <args>` against the local API service and returns its stdout.
+func apiOutput(bin, listen, secret string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	full := append([]string{"api", "--url", "http://" + listen, "--secret", secret}, args...)
+	cmd := exec.CommandContext(ctx, bin, full...)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stripANSI(stderr.String()))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("sing-box api %s: %s", strings.Join(args, " "), msg)
+	}
+	return stdout.String(), nil
 }
 
 // SelectedProxy returns the PROXY selector's current choice（如 "auto" 或节点名）.
-func SelectedProxy(listen, secret string) (string, error) {
-	resp, err := apiDo(http.MethodGet, listen, secret, "/proxies/PROXY", nil)
+func SelectedProxy(bin, listen, secret string) (string, error) {
+	out, err := apiOutput(bin, listen, secret, "group", "show", "PROXY")
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("clash_api HTTP %d", resp.StatusCode)
+	if now := parseSelected(out); now != "" {
+		return now, nil
 	}
-	var v struct {
-		Now string `json:"now"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
-		return "", err
-	}
-	return v.Now, nil
+	return "", fmt.Errorf("sing-box api group show 输出里没有 Selected 行")
 }
 
-// SelectProxy switches the PROXY selector to name via clash_api.
-func SelectProxy(listen, secret, name string) error {
-	b, _ := json.Marshal(map[string]string{"name": name})
-	resp, err := apiDo(http.MethodPut, listen, secret, "/proxies/PROXY", bytes.NewReader(b))
-	if err != nil {
-		return err
+// parseSelected 从 `sing-box api group show` 的块输出（"标签:   值" 每行一项）里取 Selected。
+func parseSelected(out string) string {
+	for _, ln := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(stripANSI(ln)), "Selected:"); ok {
+			v = strings.TrimSpace(v)
+			if v == "-" {
+				return ""
+			}
+			return v
+		}
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("clash_api HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
-	}
-	return nil
+	return ""
+}
+
+// SelectProxy switches the PROXY selector to name.
+func SelectProxy(bin, listen, secret, name string) error {
+	_, err := apiOutput(bin, listen, secret, "group", "select", "PROXY", name)
+	return err
 }
 
 func tailFile(path string, n int) string {
@@ -367,7 +467,7 @@ type CheckResult struct {
 }
 
 // Doctor runs environment sanity checks. It only reports — it never mutates
-// system state.
+// system state. 平台相关项（TUN 设备/权限、IPv6、系统 DNS）来自 platformChecks。
 func Doctor(d profile.Dirs, st *profile.State) []CheckResult {
 	var out []CheckResult
 	add := func(name string, ok bool, detail string) {
@@ -383,35 +483,10 @@ func Doctor(d profile.Dirs, st *profile.State) []CheckResult {
 		add("sing-box 二进制", false, bin+" 无法执行: "+verr.Error())
 	}
 
-	if _, err := os.Stat("/dev/net/tun"); err == nil {
-		add("/dev/net/tun", true, "存在")
-	} else {
-		add("/dev/net/tun", false, "不存在——TUN 模式不可用（容器内需映射该设备）")
-	}
-
-	if st.Settings.TunEnabled {
-		if os.Geteuid() == 0 {
-			add("TUN 权限", true, "当前是 root")
-		} else {
-			cap := ""
-			if bin != "" {
-				if out2, err := exec.Command("getcap", bin).Output(); err == nil && strings.Contains(string(out2), "cap_net_admin") {
-					cap = "已 setcap cap_net_admin"
-				}
-			}
-			if cap != "" {
-				add("TUN 权限", true, cap)
-			} else {
-				add("TUN 权限", false,
-					"非 root 且二进制无 CAP_NET_ADMIN。二选一：sudo ./ssb start；或一次性授权（只改本目录文件）: sudo setcap cap_net_admin+ep "+bin)
-			}
-		}
-		name, ok, detail := ipv6Check(st.Settings.IPv6)
-		add(name, ok, detail)
-	}
+	out = append(out, platformChecks(st, bin)...)
 
 	for _, p := range []struct{ name, addr string }{
-		{"clash_api 端口", st.Settings.ClashListen},
+		{"API 端口", st.Settings.APIListen},
 		{"mixed 端口", net.JoinHostPort("127.0.0.1", strconv.Itoa(st.Settings.MixedPort))},
 	} {
 		conn, err := net.DialTimeout("tcp", p.addr, 500*time.Millisecond)
@@ -427,57 +502,38 @@ func Doctor(d profile.Dirs, st *profile.State) []CheckResult {
 		}
 	}
 
-	if b, err := os.ReadFile("/etc/resolv.conf"); err == nil && bytes.Contains(b, []byte("127.0.0.53")) {
-		add("systemd-resolved", true,
-			"检测到 127.0.0.53 存根。TUN+hijack-dns 通常可正常工作；若遇解析异常，可手动设置 DNSStubListener=no（见 README，工具不会代改系统文件）")
-	}
-
 	if _, err := os.Stat(d.ConfigFile()); err == nil && bin != "" {
 		if warn, err := Check(bin, d.ConfigFile()); err != nil {
 			add("config.json", false, err.Error())
 		} else if warn != "" {
-			add("config.json", false, "check 通过，但内核有告警（多为新版弃用项，建议 ./ssb gen 重新生成）：\n"+warn)
+			add("config.json", false, fmt.Sprintf("check 通过，但内核有告警（多为新版弃用项，建议 %s gen 重新生成）：\n%s", Self, warn))
 		} else {
 			add("config.json", true, "check 通过")
 		}
 	} else {
-		add("config.json", false, "尚未生成（添加节点/订阅后自动生成，或运行 ./ssb gen）")
+		add("config.json", false, fmt.Sprintf("尚未生成（添加节点/订阅后自动生成，或运行 %s gen）", Self))
 	}
 	return out
 }
 
-// ipv6Check compares 内核 IPv6 能力 与 settings.ipv6，这是启动报
-// "add rule N/M: address family not supported by protocol" 的唯一来源：
-// sing-box 的 auto_route 要下 AF_INET6 策略路由，内核没有 IPv6（或没有 IPv6
-// 策略路由）就会被拒绝。
+// ipv6Check compares 本机 IPv6 能力（平台的 ipv6Status）与 settings.ipv6。
+// Linux 上这是启动报 "add rule N/M: address family not supported by protocol"
+// 的唯一来源：sing-box 的 auto_route 要下 AF_INET6 策略路由，内核没有 IPv6
+// （或没有 IPv6 策略路由）就会被拒绝。
 func ipv6Check(mode string) (name string, ok bool, detail string) {
 	name = "IPv6"
 	if mode == "" {
 		mode = "auto"
 	}
-	_, stackErr := os.Stat("/proc/net/if_inet6")
-	hasStack := stackErr == nil
-	if b, err := os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6"); err == nil && strings.TrimSpace(string(b)) == "1" {
-		hasStack = false
-	}
-	rules := render.IPv6RuleSupported()
-	var why string
-	switch {
-	case !hasStack:
-		why = "内核没有 IPv6（无 /proc/net/if_inet6 或 disable_ipv6=1）"
-	case rules == 0:
-		why = "内核有 IPv6 地址但不支持 IPv6 策略路由（缺 CONFIG_IPV6_MULTIPLE_TABLES）"
-	case rules < 0:
-		why = "netlink 探测失败，无法确认 IPv6 策略路由支持情况"
-	}
+	problem, okDetail := ipv6Status()
 	switch {
 	case mode == "off":
 		return name, true, "设置为 off：TUN 只配 IPv4、不开 strict_route"
-	case why != "" && mode == "on":
-		return name, false, why + "，但设置里 IPv6=on —— TUN 会启动失败，请改回 auto 或 off"
-	case why != "":
-		return name, true, why + "，auto 已自动降级为纯 IPv4"
+	case problem != "" && mode == "on":
+		return name, false, problem + "，但设置里 IPv6=on —— TUN 会启动失败，请改回 auto 或 off"
+	case problem != "":
+		return name, true, problem + "，auto 已自动降级为纯 IPv4"
 	default:
-		return name, true, "内核支持 IPv6 策略路由（当前设置 " + mode + "）"
+		return name, true, okDetail + "（当前设置 " + mode + "）"
 	}
 }

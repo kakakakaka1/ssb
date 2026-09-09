@@ -17,3 +17,10 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: CGO_ENABLED=0 go build ./cmd/ssb
+      # Windows 只能交叉编译校验（runner 是 Linux）：平台文件里的 x/sys/windows 调用与
+      # 构建标签在这里把关；进程管理 / TUN 的真实行为需要在 Win11 上手动过一遍。
+      - name: Cross-compile for Windows
+        run: |
+          GOOS=windows GOARCH=amd64 go vet ./...
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o /dev/null ./cmd/ssb
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -o /dev/null ./cmd/ssb

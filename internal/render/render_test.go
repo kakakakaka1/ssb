@@ -77,12 +77,15 @@ func TestBuildRuleMode(t *testing.T) {
 		t.Fatal("rule 模式应有 geosite-cn + geoip-cn 两个规则集")
 	}
 
-	capi := m["experimental"].(map[string]any)["clash_api"].(map[string]any)
-	if capi["secret"] == "" || capi["external_controller"] != "127.0.0.1:9090" {
-		t.Fatalf("clash_api 错误: %v", capi)
+	api := apiService(t, m)
+	if api["secret"] == "" || api["listen"] != "127.0.0.1" || api["listen_port"] != float64(9090) {
+		t.Fatalf("api 服务错误: %v", api)
 	}
-	if _, has := capi["external_ui"]; has {
-		t.Fatal("Dashboard 默认应关闭（不应有 external_ui）")
+	if _, has := api["dashboard"]; has {
+		t.Fatal("Dashboard 默认应关闭（api 服务不应带 dashboard）")
+	}
+	if _, has := m["experimental"].(map[string]any)["clash_api"]; has {
+		t.Fatal("已全面换成官方 API 服务，不应再生成 clash_api")
 	}
 	if m["log"].(map[string]any)["level"] != "warn" {
 		t.Fatal("日志级别默认应为 warn")
@@ -108,9 +111,11 @@ func TestBuildGlobalModeAndNoTun(t *testing.T) {
 	if len(inb) != 1 || inb[0].(map[string]any)["type"] != "mixed" {
 		t.Fatalf("关 TUN 后应只有 mixed 入站: %v", inb)
 	}
-	capi := m["experimental"].(map[string]any)["clash_api"].(map[string]any)
-	if capi["default_mode"] != "Global" {
-		t.Fatal("default_mode 应为 Global")
+	// 没有 clash_api 时 clash_mode 永远不会匹配，规则里不该再出现
+	for _, r := range route["rules"].([]any) {
+		if _, has := r.(map[string]any)["clash_mode"]; has {
+			t.Fatalf("不应生成 clash_mode 规则: %v", r)
+		}
 	}
 }
 
@@ -133,19 +138,30 @@ func TestBuildEmptyNodes(t *testing.T) {
 	}
 }
 
+// apiService 取出 services 里的官方 API 服务。
+func apiService(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	svcs, _ := m["services"].([]any)
+	for _, s := range svcs {
+		if sm := s.(map[string]any); sm["type"] == "api" {
+			return sm
+		}
+	}
+	t.Fatalf("缺少 api 服务: %v", m["services"])
+	return nil
+}
+
 func TestDashboardOff(t *testing.T) {
 	st := testState(t)
 	st.Settings.DashboardOff = true
 	m := build(t, st)
-	capi := m["experimental"].(map[string]any)["clash_api"].(map[string]any)
-	for _, k := range []string{"external_ui", "external_ui_download_url", "external_ui_download_detour"} {
-		if _, has := capi[k]; has {
-			t.Fatalf("关闭面板后不应有 %s", k)
-		}
+	api := apiService(t, m)
+	if _, has := api["dashboard"]; has {
+		t.Fatalf("关闭面板后 api 服务不应带 dashboard: %v", api)
 	}
-	// clash_api 本体必须保留（TUI 切换节点依赖）
-	if capi["external_controller"] != "127.0.0.1:9090" || capi["secret"] == "" {
-		t.Fatalf("clash_api 应保留: %v", capi)
+	// API 服务本体必须保留（TUI 切换节点依赖）
+	if api["listen"] != "127.0.0.1" || api["listen_port"] != float64(9090) || api["secret"] == "" {
+		t.Fatalf("api 服务应保留: %v", api)
 	}
 }
 
@@ -153,9 +169,40 @@ func TestDashboardOn(t *testing.T) {
 	st := testState(t)
 	st.Settings.DashboardOff = false
 	m := build(t, st)
-	capi := m["experimental"].(map[string]any)["clash_api"].(map[string]any)
-	if !strings.Contains(capi["external_ui_download_url"].(string), "metacubexd") {
-		t.Fatalf("开启面板后应有 metacubexd 下载地址: %v", capi)
+	dash := apiService(t, m)["dashboard"].(map[string]any)
+	if dash["enabled"] != true || dash["http_client"] != httpClientTag {
+		t.Fatalf("dashboard 应启用并显式指定 http_client: %v", dash)
+	}
+	if !strings.Contains(dash["download_url"].(string), "SagerNet/sing-box-dashboard") {
+		t.Fatalf("开启面板后应下载官方 sing-box Dashboard: %v", dash)
+	}
+	if !strings.HasSuffix(dash["path"].(string), "dashboard") {
+		t.Fatalf("面板目录应为 data/dashboard: %v", dash["path"])
+	}
+}
+
+// global 模式没有规则集，但开了面板仍要声明 http_clients（否则内核回退到已弃用的隐式客户端）。
+func TestDashboardNeedsHTTPClient(t *testing.T) {
+	st := testState(t)
+	st.Settings.RouteMode = "global"
+	st.Settings.DashboardOff = false
+	m := build(t, st)
+	hc := m["http_clients"].([]any)
+	if len(hc) != 1 || hc[0].(map[string]any)["tag"] != httpClientTag {
+		t.Fatalf("开面板时应声明 http_clients: %v", hc)
+	}
+}
+
+func TestAPIListenInvalid(t *testing.T) {
+	st := testState(t)
+	st.Settings.APIListen = "localhost:9090"
+	if _, err := Build(st, profile.Dirs{Base: "/tmp/ssb-test"}); err == nil {
+		t.Fatal("listen 不是 IP 时应报错")
+	}
+	st.Settings.APIListen = ":9091"
+	api := apiService(t, build(t, st))
+	if api["listen"] != "0.0.0.0" || api["listen_port"] != float64(9091) {
+		t.Fatalf("\":port\" 应监听全部地址: %v", api)
 	}
 }
 
@@ -303,10 +350,9 @@ func TestRuleSetCDNAndMirrorPrefix(t *testing.T) {
 	}
 
 	// 镜像前缀只作用于 GitHub 资源（Dashboard/内核下载）
-	capi := m["experimental"].(map[string]any)["clash_api"].(map[string]any)
-	ui := capi["external_ui_download_url"].(string)
+	ui := apiService(t, m)["dashboard"].(map[string]any)["download_url"].(string)
 	if !strings.HasPrefix(ui, "https://ghproxy.net/https://github.com/") {
-		t.Fatalf("UI 下载地址镜像前缀未生效: %s", ui)
+		t.Fatalf("面板下载地址镜像前缀未生效: %s", ui)
 	}
 }
 
