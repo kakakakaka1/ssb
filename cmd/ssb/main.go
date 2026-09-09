@@ -201,6 +201,7 @@ func main() {
 			fmt.Println("Dashboard 已关闭（TUI 节点页可直接切换节点）")
 		} else {
 			fmt.Println("Dashboard:", a.DashboardURL())
+			fmt.Println("secret   :", a.State.Settings.APISecret)
 		}
 
 	case "stop":

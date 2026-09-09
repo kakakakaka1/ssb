@@ -98,8 +98,8 @@ func HasTunPrivilege(string) bool { return IsElevated() }
 
 // TunPrivilegeHint is the actionable advice shown when HasTunPrivilege is false.
 func TunPrivilegeHint(string) string {
-	return "已启用 TUN 但当前终端没有管理员权限（创建 wintun 网卡需要管理员）。\n" +
-		"  右键 Windows Terminal / PowerShell → 「以管理员身份运行」，再执行 " + Self + " start\n" +
+	return "已启用 TUN 但当前没有管理员权限（创建 wintun 网卡需要管理员）。\n" +
+		"  右键 ssb.exe 或终端 → 「以管理员身份运行」，再启动\n" +
 		"（或在设置中关闭 TUN，仅用本地 mixed 端口）"
 }
 
@@ -131,7 +131,7 @@ func platformChecks(st *profile.State, _ string) []CheckResult {
 			add("TUN 权限", true, "当前是管理员")
 		} else {
 			add("TUN 权限", false, "未以管理员身份运行，无法创建 wintun 网卡。"+
-				"右键 Windows Terminal / PowerShell → 「以管理员身份运行」（或在设置中关闭 TUN）")
+				"右键 ssb.exe 或终端 → 「以管理员身份运行」（或在设置中关闭 TUN）")
 		}
 		name, ok, detail := ipv6Check(st.Settings.IPv6)
 		add(name, ok, detail)

@@ -97,6 +97,16 @@ func settingRows(a *app.App) []settingRow {
 				S(a).APIListen = v
 				return nil
 			}},
+		{group: "本地入站", label: "API 密钥", desc: "面板连接和 sing-box api 命令要填的 secret（状态页也显示）；留空回车=重新随机生成",
+			get: func(a *app.App) string { return S(a).APISecret },
+			set: func(a *app.App, v string) error {
+				v = strings.TrimSpace(v)
+				if v == "" {
+					v = profile.RandomSecret()
+				}
+				S(a).APISecret = v
+				return nil
+			}},
 
 		{group: "面板", label: "Dashboard 网页面板", desc: "关=只用 TUI 控制（默认）；开=API 服务自动下载官方 sing-box Dashboard 到 data/dashboard/ 并在 /dashboard/ 提供",
 			opts: []string{on, off},

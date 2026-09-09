@@ -253,10 +253,11 @@ func (m model) viewStatus() string {
 	}
 	kv("模式", mode)
 	kv("规则集", render.RuleSetSourceText(s))
+	kv("API", styAccent.Render(s.APIListen)+styDim.Render("  secret ")+styBold.Render(s.APISecret))
 	if s.DashboardOff {
 		kv("面板", styDim.Render("已关闭（设置页开启）"))
 	} else {
-		kv("面板", styAccent.Render(m.a.DashboardURL()))
+		kv("面板", styAccent.Render(m.a.DashboardURL())+styDim.Render("  打开后填上面的 secret"))
 	}
 
 	b.WriteString("\n " + styGroup.Render("日志") + styDim.Render("  logs/sing-box.log"))

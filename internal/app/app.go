@@ -323,7 +323,8 @@ func (a *App) StatusText() string {
 		b.WriteString("二进制: 未找到\n")
 	}
 	alive := sbx.APIAlive(a.State.Settings.APIListen)
-	fmt.Fprintf(&b, "API 服务: %s\n", map[bool]string{true: "可达", false: "不可达"}[alive])
+	fmt.Fprintf(&b, "API 服务: %s（%s，secret %s）\n",
+		map[bool]string{true: "可达", false: "不可达"}[alive], a.State.Settings.APIListen, a.State.Settings.APISecret)
 	if alive {
 		if now := a.SelectedNode(); now != "" {
 			fmt.Fprintf(&b, "当前出口: %s\n", now)

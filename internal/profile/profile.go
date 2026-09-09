@@ -68,7 +68,7 @@ func defaultSettings() Settings {
 		MixedEnabled:   true,
 		MixedPort:      2080,
 		APIListen:      "127.0.0.1:9090",
-		APISecret:      randomSecret(),
+		APISecret:      RandomSecret(),
 		DashboardOff:   true, // 默认只用 TUI 控制，网页面板按需开启
 		FakeIP:         true,
 		DownloadDetour: "direct",
@@ -79,7 +79,7 @@ func defaultSettings() Settings {
 	}
 }
 
-func randomSecret() string {
+func RandomSecret() string {
 	b := make([]byte, 12)
 	if _, err := rand.Read(b); err != nil {
 		return "ssb-secret"
@@ -141,7 +141,7 @@ func Load(d Dirs) (*State, error) {
 		st.Settings.APIListen = "127.0.0.1:9090"
 	}
 	if st.Settings.APISecret == "" {
-		st.Settings.APISecret = randomSecret()
+		st.Settings.APISecret = RandomSecret()
 	}
 	if st.Settings.RouteMode == "" {
 		st.Settings.RouteMode = "rule"
