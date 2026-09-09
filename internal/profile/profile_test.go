@@ -12,7 +12,7 @@ func TestLoadSaveRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Settings.MixedPort != 2080 || !st.Settings.TunEnabled || st.Settings.ClashSecret == "" {
+	if st.Settings.MixedPort != 2080 || !st.Settings.TunEnabled || st.Settings.TunAddress != "10.255.0.1/30" || st.Settings.ClashSecret == "" {
 		t.Fatalf("默认设置错误: %+v", st.Settings)
 	}
 	n, err := link.Parse("trojan://pw@1.1.1.1:443?sni=a.com#节点一")

@@ -319,7 +319,7 @@ func TestIPv6Off(t *testing.T) {
 
 	tun := m["inbounds"].([]any)[0].(map[string]any)
 	addrs := tun["address"].([]any)
-	if len(addrs) != 1 || addrs[0] != "172.19.0.1/30" {
+	if len(addrs) != 1 || addrs[0] != "10.255.0.1/30" {
 		t.Fatalf("关闭 IPv6 后 TUN 只能有 IPv4 地址: %v", addrs)
 	}
 	if tun["strict_route"] != false {
@@ -397,5 +397,18 @@ func TestIPv6Auto(t *testing.T) {
 	tun = build(t, st)["inbounds"].([]any)[0].(map[string]any)
 	if len(tun["address"].([]any)) != 2 || tun["strict_route"] != true {
 		t.Fatalf("内核有 IPv6 时 auto 应保留 v6: %v", tun)
+	}
+}
+
+func TestCustomTunAddress(t *testing.T) {
+	st := testState(t)
+	st.Settings.IPv6 = "off"
+	st.Settings.TunAddress = "198.18.0.1/30"
+	m := build(t, st)
+
+	tun := m["inbounds"].([]any)[0].(map[string]any)
+	addrs := tun["address"].([]any)
+	if len(addrs) != 1 || addrs[0] != "198.18.0.1/30" {
+		t.Fatalf("自定义 TUN IP 未生效: %v", addrs)
 	}
 }

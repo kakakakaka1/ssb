@@ -63,6 +63,8 @@ func settingRows(a *app.App) []settingRow {
 			[]string{"rule", "global"}, func(a *app.App) *string { return &S(a).RouteMode }),
 		boolRow("代理", "TUN 透明代理", "接管系统全部流量，需要 root 或 CAP_NET_ADMIN；关掉则只有本地 mixed 端口",
 			func(a *app.App) *bool { return &S(a).TunEnabled }),
+		textRow("代理", "TUN IP", "TUN 虚拟网卡 IPv4 CIDR（默认 10.255.0.1/30，避开 Docker 默认网段）",
+			func(a *app.App) *string { return &S(a).TunAddress }),
 		enumRow("代理", "IPv6", "auto=按内核能力探测（推荐）；启动报 address family not supported 就选 off",
 			[]string{"auto", "on", "off"}, func(a *app.App) *string { return &S(a).IPv6 }),
 		boolRow("代理", "auto_redirect", "Linux 用 nftables 加速 TUN 转发，一般保持开",

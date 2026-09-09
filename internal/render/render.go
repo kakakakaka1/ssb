@@ -192,7 +192,7 @@ func Build(st *profile.State, dirs profile.Dirs) ([]byte, error) {
 	// ---- inbounds ----
 	var inbounds []any
 	if s.TunEnabled {
-		addrs := []string{"172.19.0.1/30"}
+		addrs := []string{s.TunAddress}
 		if v6 {
 			addrs = append(addrs, "fdfe:dcba:9876::1/126")
 		}
